@@ -9,6 +9,7 @@ package org.hibernate.metamodel.mapping;
 import java.util.List;
 import java.util.function.Consumer;
 
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.util.IndexedConsumer;
 import org.hibernate.property.access.spi.PropertyAccess;
@@ -20,6 +21,7 @@ import org.hibernate.sql.ast.tree.from.TableGroup;
 import org.hibernate.sql.ast.tree.from.TableGroupJoinProducer;
 import org.hibernate.sql.results.graph.Fetchable;
 import org.hibernate.sql.results.graph.FetchableContainer;
+import org.hibernate.type.descriptor.java.JavaType;
 
 /**
  * Describes the mapping of an embeddable (composite).
@@ -34,6 +36,11 @@ public interface EmbeddableValuedModelPart extends ValuedModelPart, Fetchable, F
 	@Override
 	default EmbeddableMappingType getMappedType() {
 		return getEmbeddableTypeDescriptor();
+	}
+
+	@Override
+	default JavaType<?> getJavaType() {
+		return getEmbeddableTypeDescriptor().getJavaType();
 	}
 
 	@Override
@@ -72,12 +79,51 @@ public interface EmbeddableValuedModelPart extends ValuedModelPart, Fetchable, F
 	}
 
 	@Override
-	default int forEachJdbcValue(
+	default <X, Y> int forEachJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		return getEmbeddableTypeDescriptor().forEachJdbcValue( value, offset, valuesConsumer, session );
+		return getEmbeddableTypeDescriptor().forEachJdbcValue( value, offset, x, y, valuesConsumer, session );
+	}
+
+	@Override
+	default <X, Y> int breakDownJdbcValues(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		return getEmbeddableTypeDescriptor().breakDownJdbcValues( domainValue, offset, x, y, valueConsumer, session );
+	}
+
+	@Override
+	default  <X, Y> int decompose(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		return getEmbeddableTypeDescriptor().decompose( domainValue, offset, x, y, valueConsumer, session );
+	}
+
+	@Override
+	default int getNumberOfFetchables() {
+		return getEmbeddableTypeDescriptor().getNumberOfAttributeMappings();
+	}
+
+	@Override
+	default Fetchable getFetchable(int position) {
+		return getEmbeddableTypeDescriptor().getFetchable( position );
+	}
+
+	@Override
+	default int getSelectableIndex(String selectableName) {
+		return getEmbeddableTypeDescriptor().getSelectableIndex( selectableName );
 	}
 
 	@Override
@@ -91,14 +137,33 @@ public interface EmbeddableValuedModelPart extends ValuedModelPart, Fetchable, F
 	}
 
 	@Override
-	default int forEachDisassembledJdbcValue(
+	default void forEachInsertable(SelectableConsumer consumer) {
+		getEmbeddableTypeDescriptor().forEachInsertable( 0, consumer );
+	}
+
+	@Override
+	default void forEachUpdatable(SelectableConsumer consumer) {
+		getEmbeddableTypeDescriptor().forEachUpdatable( 0, consumer );
+	}
+
+	@Override
+	default boolean hasPartitionedSelectionMapping() {
+		return getEmbeddableTypeDescriptor().hasPartitionedSelectionMapping();
+	}
+
+	@Override
+	default <X, Y> int forEachDisassembledJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
 		return getEmbeddableTypeDescriptor().forEachDisassembledJdbcValue(
 				value,
 				offset,
+				x,
+				y,
 				valuesConsumer,
 				session
 		);
@@ -107,6 +172,11 @@ public interface EmbeddableValuedModelPart extends ValuedModelPart, Fetchable, F
 	@Override
 	default Object disassemble(Object value, SharedSessionContractImplementor session) {
 		return getEmbeddableTypeDescriptor().disassemble( value, session );
+	}
+
+	@Override
+	default void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
+		getEmbeddableTypeDescriptor().addToCacheKey( cacheKey, value, session );
 	}
 
 	/**

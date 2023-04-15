@@ -1,9 +1,10 @@
 [[sql]]
 == Native SQL Queries
 :root-project-dir: ../../../../../../../..
-:documentation-project-dir: {root-project-dir}/documentation
-:example-dir-model: {documentation-project-dir}/src/main/java/org/hibernate/userguide/model
-:doc-emeddable-example-dir: ../../../../../../test/java/org/hibernate/userguide/sql
+:testing-project-dir: {root-project-dir}/hibernate-testing
+:example-dir-model: {testing-project-dir}/src/main/java/org/hibernate/testing/orm/domain/userguide
+:core-project-dir: {root-project-dir}/hibernate-core
+:doc-emeddable-example-dir: {core-project-dir}/src/test/java/org/hibernate/orm/test/sql
 :extrasdir: extras
 
 You may also express queries in the native SQL dialect of your database.
@@ -342,6 +343,15 @@ include::{doc-emeddable-example-dir}/SQLTest.java[tags=sql-hibernate-dto-query-e
 There's no such equivalent in Jakarta Persistence because the `jakarta.persistence.Query` interface does not define a `setResultTransformer` method equivalent.
 ====
 
+[IMPORTANT]
+====
+When materializing a native query result as a polymorphic entity, it is important to understand that both the `JOINED` as well as the `TABLE_PER_CLASS` inheritance strategies require that the native query also include a special `clazz_` select item, which returns the subclass id that Hibernate needs to determine the concrete Java type for a row.
+
+The subclass id is determined based on some order and the base class of the entity hierarchy has the number 0.
+
+Refer to the respective sections in the inheritance chapter for examples of this.
+====
+
 The above query will return a list of `PersonSummaryDTO` which has been instantiated and injected the values of `id` and `name` into its corresponding properties or fields.
 
 [[sql-inheritance-query]]
@@ -494,7 +504,7 @@ include::{example-dir-model}/PersonNames.java[tags=sql-ConstructorResult-dto-exa
 ====
 [source, JAVA, indent=0]
 ----
-include::{modeldir}/Person.java[tags=sql-multiple-scalar-values-dto-NamedNativeQuery-example]
+include::{example-dir-model}/Person.java[tags=sql-multiple-scalar-values-dto-NamedNativeQuery-example]
 ----
 ====
 
@@ -869,10 +879,10 @@ For columns, see <<chapters/domain/basic_types.adoc#mapping-column-read-and-writ
 
 The following example shows how to define custom SQL operations using annotations.
 `@SQLInsert`, `@SQLUpdate`, and `@SQLDelete` override the INSERT, UPDATE, DELETE statements of a given entity.
-For the SELECT clause, a `@Loader` must be defined along with a `@NamedNativeQuery` used for loading the underlying table record.
+Similarly, `@SQLSelect` specifies a custom SELECT query used for loading the underlying table record.
 
 For collections, Hibernate allows defining a custom `@SQLDeleteAll` which is used for removing all child records associated with a given parent entity.
-To filter collections, the `@Where` annotation allows customizing the underlying SQL WHERE clause.
+To filter collections, the `@SQLRestriction` annotation allows customizing the underlying SQL WHERE clause.
 
 [[sql-custom-crud-example]]
 .Custom CRUD
@@ -885,7 +895,7 @@ include::{doc-emeddable-example-dir}/CustomSQLTest.java[tags=sql-custom-crud-exa
 
 In the example above, the entity is mapped so that entries are soft-deleted (the records are not removed from the database, but instead, a flag marks the row validity).
 The `Person` entity benefits from custom INSERT, UPDATE, and DELETE statements which update the `valid` column accordingly.
-The custom `@Loader` is used to retrieve only `Person` rows that are valid.
+The custom `@SQLSelect` is used to retrieve only `Person` rows that are valid.
 
 The same is done for the `phones` collection. The `@SQLDeleteAll` and the `SQLInsert` queries are used whenever the collection is modified.
 

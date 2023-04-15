@@ -31,8 +31,7 @@ import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.ast.Clause;
 import org.hibernate.sql.ast.SqlAstJoinType;
 import org.hibernate.sql.ast.spi.FromClauseAccess;
-import org.hibernate.sql.ast.spi.SqlAliasBaseGenerator;
-import org.hibernate.sql.ast.spi.SqlAstCreationContext;
+import org.hibernate.sql.ast.spi.SqlAliasBase;
 import org.hibernate.sql.ast.spi.SqlAstCreationState;
 import org.hibernate.sql.ast.spi.SqlExpressionResolver;
 import org.hibernate.sql.ast.spi.SqlSelection;
@@ -226,13 +225,11 @@ public class EmbeddedCollectionPart implements CollectionPart, EmbeddableValuedF
 			NavigablePath navigablePath,
 			TableGroup lhs,
 			String explicitSourceAlias,
+			SqlAliasBase explicitSqlAliasBase,
 			SqlAstJoinType requestedJoinType,
 			boolean fetched,
 			boolean addsPredicate,
-			SqlAliasBaseGenerator aliasBaseGenerator,
-			SqlExpressionResolver sqlExpressionResolver,
-			FromClauseAccess fromClauseAccess,
-			SqlAstCreationContext creationContext) {
+			SqlAstCreationState creationState) {
 		final SqlAstJoinType joinType;
 		if ( requestedJoinType == null ) {
 			joinType = SqlAstJoinType.INNER;
@@ -244,13 +241,11 @@ public class EmbeddedCollectionPart implements CollectionPart, EmbeddableValuedF
 				navigablePath,
 				lhs,
 				explicitSourceAlias,
+				explicitSqlAliasBase,
 				requestedJoinType,
 				fetched,
 				null,
-				aliasBaseGenerator,
-				sqlExpressionResolver,
-				fromClauseAccess,
-				creationContext
+				creationState
 		);
 
 		return new TableGroupJoin( navigablePath, joinType, tableGroup, null );
@@ -261,15 +256,12 @@ public class EmbeddedCollectionPart implements CollectionPart, EmbeddableValuedF
 			NavigablePath navigablePath,
 			TableGroup lhs,
 			String explicitSourceAlias,
-			SqlAstJoinType requestedJoinType,
+			SqlAliasBase explicitSqlAliasBase,
+			SqlAstJoinType sqlAstJoinType,
 			boolean fetched,
 			Consumer<Predicate> predicateConsumer,
-			SqlAliasBaseGenerator aliasBaseGenerator,
-			SqlExpressionResolver sqlExpressionResolver,
-			FromClauseAccess fromClauseAccess,
-			SqlAstCreationContext creationContext) {
+			SqlAstCreationState creationState) {
 		assert lhs.getModelPart() instanceof PluralAttributeMapping;
-
 		return new StandardVirtualTableGroup( navigablePath, this, lhs, fetched );
 	}
 
@@ -306,11 +298,6 @@ public class EmbeddedCollectionPart implements CollectionPart, EmbeddableValuedF
 	}
 
 	@Override
-	public JavaType<?> getJavaType() {
-		return getEmbeddableTypeDescriptor().getJavaType();
-	}
-
-	@Override
 	public JavaType<?> getExpressibleJavaType() {
 		return getJavaType();
 	}
@@ -326,26 +313,6 @@ public class EmbeddedCollectionPart implements CollectionPart, EmbeddableValuedF
 	}
 
 	@Override
-	public int getNumberOfFetchables() {
-		return getEmbeddableTypeDescriptor().getNumberOfAttributeMappings();
-	}
-
-	@Override
-	public Fetchable getFetchable(int position) {
-		return getEmbeddableTypeDescriptor().getFetchable( position );
-	}
-
-	@Override
-	public int forEachSelectable(int offset, SelectableConsumer consumer) {
-		return getEmbeddableTypeDescriptor().forEachSelectable( offset, consumer );
-	}
-
-	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		getEmbeddableTypeDescriptor().breakDownJdbcValues( domainValue, valueConsumer, session );
-	}
-
-	@Override
 	public FetchStyle getStyle() {
 		return FetchStyle.JOIN;
 	}
@@ -353,11 +320,6 @@ public class EmbeddedCollectionPart implements CollectionPart, EmbeddableValuedF
 	@Override
 	public FetchTiming getTiming() {
 		return FetchTiming.IMMEDIATE;
-	}
-
-	@Override
-	public boolean hasPartitionedSelectionMapping() {
-		return getEmbeddableTypeDescriptor().hasPartitionedSelectionMapping();
 	}
 
 }

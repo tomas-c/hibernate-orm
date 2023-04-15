@@ -323,4 +323,13 @@ public interface JavaType<T> extends Serializable {
 		return createJavaType( parameterizedType );
 	}
 
+	/**
+	 * Return true if the implementation is an instance of {@link  TemporalJavaType}
+	 *
+	 * @return true if it is an instance of {@link  TemporalJavaType}; false otherwise
+	 */
+	default boolean isTemporalType() {
+		return false;
+	}
+
 }

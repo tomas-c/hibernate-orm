@@ -48,14 +48,11 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
  * List&lt;Document&gt; documents;
  * </pre>
  * <p>
- * By default, {@code @Where} restrictions declared for an entity are
- * applied when loading a collection of that entity type. This behavior is
- * controlled by:
- * <ol>
- * <li>the annotation member {@link #applyInToManyFetch()}, and
- * <li>the configuration property
- *     {@value org.hibernate.cfg.AvailableSettings#USE_ENTITY_WHERE_CLAUSE_FOR_COLLECTIONS}.
- * </ol>
+ * By default, {@code @Where} restrictions declared for an entity are also
+ * applied when loading associations of that entity type. This behavior can
+ * be disabled using the setting
+ * {@value org.hibernate.cfg.AvailableSettings#USE_ENTITY_WHERE_CLAUSE_FOR_COLLECTIONS}.
+ * However, this setting is now deprecated.
  * <p>
  * Note that {@code @Where} restrictions are always applied and cannot be
  * disabled. Nor may they be parameterized. They're therefore <em>much</em>
@@ -67,29 +64,15 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
  * @see WhereJoinTable
  *
  * @author Emmanuel Bernard
+ *
+ * @deprecated Use {@link SQLRestriction}
  */
 @Target({TYPE, METHOD, FIELD})
 @Retention(RUNTIME)
+@Deprecated(since = "6.3")
 public @interface Where {
 	/**
 	 * A predicate, written in native SQL.
 	 */
 	String clause();
-
-	/**
-	 * If this restriction applies to an entity type, should it also be
-	 * applied when fetching a {@link jakarta.persistence.OneToMany} or
-	 * {@link jakarta.persistence.ManyToOne} association that targets
-	 * the entity type?
-	 * <p>
-	 * By default, the restriction is not applied unless the property
-	 * {@value org.hibernate.cfg.AvailableSettings#USE_ENTITY_WHERE_CLAUSE_FOR_COLLECTIONS}
-	 * is explicitly disabled.
-	 *
-	 * @return {@code true} if the restriction should be applied even
-	 *         if the configuration property is not enabled
-	 *
-	 * @since 6.2
-	 */
-	boolean applyInToManyFetch() default false;
 }

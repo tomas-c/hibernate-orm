@@ -6,12 +6,14 @@
  */
 package org.hibernate.metamodel.mapping.internal;
 
+import java.io.Serializable;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.BiConsumer;
 import java.util.function.IntFunction;
 
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.FetchStyle;
 import org.hibernate.engine.FetchTiming;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
@@ -35,7 +37,6 @@ import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.proxy.LazyInitializer;
 import org.hibernate.query.sqm.ComparisonOperator;
 import org.hibernate.spi.NavigablePath;
-import org.hibernate.sql.ast.spi.SqlAstCreationContext;
 import org.hibernate.sql.ast.spi.SqlAstCreationState;
 import org.hibernate.sql.ast.spi.SqlExpressionResolver;
 import org.hibernate.sql.ast.spi.SqlSelection;
@@ -53,6 +54,7 @@ import org.hibernate.sql.results.graph.Fetch;
 import org.hibernate.sql.results.graph.FetchOptions;
 import org.hibernate.sql.results.graph.FetchParent;
 import org.hibernate.sql.results.graph.basic.BasicResult;
+import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
 import org.hibernate.type.descriptor.java.JavaType;
 
 /**
@@ -339,18 +341,11 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 	public Predicate generateJoinPredicate(
 			TableReference targetSideReference,
 			TableReference keySideReference,
-			SqlExpressionResolver sqlExpressionResolver,
-			SqlAstCreationContext creationContext) {
+			SqlAstCreationState creationState) {
 		return new ComparisonPredicate(
-				new ColumnReference(
-						targetSideReference,
-						targetSide.getModelPart()
-				),
+				new ColumnReference( targetSideReference, targetSide.getModelPart() ),
 				ComparisonOperator.EQUAL,
-				new ColumnReference(
-						keySideReference,
-						keySide.getModelPart()
-				)
+				new ColumnReference( keySideReference, keySide.getModelPart() )
 		);
 	}
 
@@ -358,8 +353,7 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 	public Predicate generateJoinPredicate(
 			TableGroup targetSideTableGroup,
 			TableGroup keySideTableGroup,
-			SqlExpressionResolver sqlExpressionResolver,
-			SqlAstCreationContext creationContext) {
+			SqlAstCreationState creationState) {
 		final TableReference lhsTableReference = targetSideTableGroup.resolveTableReference(
 				targetSideTableGroup.getNavigablePath(),
 				targetSide.getModelPart().getContainingTableExpression(),
@@ -371,12 +365,7 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 				false
 		);
 
-		return generateJoinPredicate(
-				lhsTableReference,
-				rhsTableKeyReference,
-				sqlExpressionResolver,
-				creationContext
-		);
+		return generateJoinPredicate( lhsTableReference, rhsTableKeyReference, creationState );
 	}
 
 	@Override
@@ -433,6 +422,31 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 	}
 
 	@Override
+	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
+		if ( value == null ) {
+			return;
+		}
+		final JdbcMapping jdbcMapping = getJdbcMapping();
+		final BasicValueConverter converter = jdbcMapping.getValueConverter();
+		final Serializable disassemble;
+		final int hashCode;
+		if ( converter == null ) {
+			final JavaType javaTypeDescriptor = jdbcMapping.getJavaTypeDescriptor();
+			disassemble = javaTypeDescriptor.getMutabilityPlan().disassemble( value, session );
+			hashCode = javaTypeDescriptor.extractHashCode( disassemble );
+		}
+		else {
+			final Object relationalValue = converter.toRelationalValue( value );
+			final JavaType relationalJavaType = converter.getRelationalJavaType();
+			disassemble = relationalJavaType.getMutabilityPlan().disassemble( relationalValue, session );
+			hashCode = relationalJavaType.extractHashCode( relationalValue );
+		}
+
+		cacheKey.addValue( disassemble );
+		cacheKey.addHashCode( hashCode );
+	}
+
+	@Override
 	public Object getAssociationKeyFromSide(
 			Object targetObject,
 			ForeignKeyDescriptor.Side side,
@@ -454,18 +468,27 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 	}
 
 	@Override
-	public int forEachDisassembledJdbcValue(
+	public <X, Y> int forEachDisassembledJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		valuesConsumer.consume( offset, value, getJdbcMapping() );
-		return 1;
+		valuesConsumer.consume( offset, x, y, value, getJdbcMapping() );
+		return getJdbcTypeCount();
 	}
 
 	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		valueConsumer.consume( disassemble( domainValue, session ), keySide.getModelPart() );
+	public <X, Y> int breakDownJdbcValues(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		valueConsumer.consume( offset, x, y, disassemble( domainValue, session ), keySide.getModelPart() );
+		return getJdbcTypeCount();
 	}
 
 	@Override
@@ -519,12 +542,14 @@ public class SimpleForeignKeyDescriptor implements ForeignKeyDescriptor, BasicVa
 	}
 
 	@Override
-	public int forEachJdbcValue(
+	public <X, Y> int forEachJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		valuesConsumer.consume( offset, disassemble( value, session ), targetSide.getModelPart().getJdbcMapping() );
+		valuesConsumer.consume( offset, x, y, disassemble( value, session ), targetSide.getModelPart().getJdbcMapping() );
 		return getJdbcTypeCount();
 	}
 

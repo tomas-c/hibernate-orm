@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.function.Consumer;
 
 import org.hibernate.HibernateException;
+import org.hibernate.Internal;
 import org.hibernate.MappingException;
 import org.hibernate.cache.CacheException;
 import org.hibernate.cache.spi.access.CollectionDataAccess;
@@ -25,12 +26,12 @@ import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.FilterAliasGenerator;
 import org.hibernate.internal.util.NullnessHelper;
 import org.hibernate.internal.util.collections.ArrayHelper;
+import org.hibernate.jdbc.Expectations;
 import org.hibernate.mapping.Collection;
 import org.hibernate.metamodel.mapping.CollectionPart;
 import org.hibernate.metamodel.mapping.EntityIdentifierMapping;
 import org.hibernate.metamodel.mapping.EntityMappingType;
 import org.hibernate.metamodel.mapping.ForeignKeyDescriptor;
-import org.hibernate.metamodel.mapping.ModelPart.JdbcValueConsumer;
 import org.hibernate.metamodel.mapping.PluralAttributeMapping;
 import org.hibernate.metamodel.mapping.SelectableMapping;
 import org.hibernate.metamodel.mapping.internal.EntityCollectionPart;
@@ -40,18 +41,23 @@ import org.hibernate.persister.collection.mutation.CollectionTableMapping;
 import org.hibernate.persister.collection.mutation.DeleteRowsCoordinator;
 import org.hibernate.persister.collection.mutation.DeleteRowsCoordinatorNoOp;
 import org.hibernate.persister.collection.mutation.DeleteRowsCoordinatorStandard;
+import org.hibernate.persister.collection.mutation.DeleteRowsCoordinatorTablePerSubclass;
 import org.hibernate.persister.collection.mutation.InsertRowsCoordinator;
 import org.hibernate.persister.collection.mutation.InsertRowsCoordinatorNoOp;
 import org.hibernate.persister.collection.mutation.InsertRowsCoordinatorStandard;
+import org.hibernate.persister.collection.mutation.InsertRowsCoordinatorTablePerSubclass;
 import org.hibernate.persister.collection.mutation.OperationProducer;
 import org.hibernate.persister.collection.mutation.RemoveCoordinator;
 import org.hibernate.persister.collection.mutation.RemoveCoordinatorNoOp;
 import org.hibernate.persister.collection.mutation.RemoveCoordinatorStandard;
+import org.hibernate.persister.collection.mutation.RemoveCoordinatorTablePerSubclass;
 import org.hibernate.persister.collection.mutation.RowMutationOperations;
 import org.hibernate.persister.collection.mutation.UpdateRowsCoordinator;
 import org.hibernate.persister.collection.mutation.UpdateRowsCoordinatorNoOp;
 import org.hibernate.persister.collection.mutation.UpdateRowsCoordinatorOneToMany;
+import org.hibernate.persister.collection.mutation.UpdateRowsCoordinatorTablePerSubclass;
 import org.hibernate.persister.entity.Joinable;
+import org.hibernate.persister.entity.UnionSubclassEntityPersister;
 import org.hibernate.persister.spi.PersisterCreationContext;
 import org.hibernate.sql.ast.SqlAstTranslator;
 import org.hibernate.sql.ast.spi.SqlAstCreationState;
@@ -88,6 +94,7 @@ import static org.hibernate.sql.model.ast.builder.TableUpdateBuilder.NULL;
  * @author Gavin King
  * @author Brett Meyer
  */
+@Internal
 public class OneToManyPersister extends AbstractCollectionPersister {
 	private final RowMutationOperations rowMutationOperations;
 
@@ -206,7 +213,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 
 		// If one-to-many and inverse, still need to create the index.  See HHH-5732.
 		final boolean doWrite = isInverse
-				&& hasIndex
+				&& hasIndex()
 				&& !indexContainsFormula
 				&& ArrayHelper.countTrue( indexColumnIsSettable ) > 0;
 		if ( !doWrite ) {
@@ -242,11 +249,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 							entry,
 							nextIndex,
 							session,
-							(jdbcValue, jdbcValueMapping, usage) -> jdbcValueBindings.bindValue(
-									jdbcValue,
-									jdbcValueMapping,
-									usage
-							)
+							jdbcValueBindings
 					);
 
 					updateRowRestrictions.applyRestrictions(
@@ -255,11 +258,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 							entry,
 							nextIndex,
 							session,
-							(jdbcValue, jdbcValueMapping) -> jdbcValueBindings.bindValue(
-									jdbcValue,
-									jdbcValueMapping,
-									ParameterUsage.RESTRICT
-							)
+							jdbcValueBindings
 					);
 
 					mutationExecutor.execute( collection, null, null, null, session );
@@ -293,15 +292,6 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 	@Override
 	public String getTableName() {
 		return ( (Joinable) getElementPersister() ).getTableName();
-	}
-
-	@Override
-	public void applyWhereRestrictions(
-			Consumer<Predicate> predicateConsumer,
-			TableGroup tableGroup,
-			boolean useQualifier,
-			SqlAstCreationState creationState) {
-		super.applyWhereRestrictions( predicateConsumer, tableGroup, useQualifier, creationState );
 	}
 
 	protected void applyWhereFragments(
@@ -338,7 +328,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 		assert fkDescriptor != null;
 
 		final int keyColumnCount = fkDescriptor.getJdbcTypeCount();
-		final int valuesCount = hasIndex
+		final int valuesCount = hasIndex()
 				? keyColumnCount + indexColumnNames.length
 				: keyColumnCount;
 
@@ -370,7 +360,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			);
 		}
 
-		if ( hasIndex && !indexContainsFormula ) {
+		if ( hasIndex() && !indexContainsFormula ) {
 			getAttributeMapping().getIndexDescriptor().forEachSelectable( (selectionIndex, selectableMapping) -> {
 				if ( ! selectableMapping.isUpdateable() ) {
 					return;
@@ -390,7 +380,8 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 				keyRestrictionBindings,
 				null,
 				parameterBinders,
-				sqlWhereString
+				sqlWhereString,
+				Expectations.NONE
 		);
 	}
 
@@ -411,7 +402,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 		final RowMutationOperations.Values writeIndexValues;
 		final RowMutationOperations.Restrictions writeIndexRestrictions;
 		final boolean needsWriteIndex = isInverse
-				&& hasIndex
+				&& hasIndex()
 				&& !indexContainsFormula
 				&& !ArrayHelper.isAllFalse( indexColumnIsSettable );
 		if ( needsWriteIndex ) {
@@ -460,6 +451,10 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			return new InsertRowsCoordinatorNoOp( this );
 		}
 
+		if ( getElementPersisterInternal() != null && getElementPersisterInternal().hasSubclasses()
+				&& getElementPersisterInternal() instanceof UnionSubclassEntityPersister ) {
+			return new InsertRowsCoordinatorTablePerSubclass( this, rowMutationOperations );
+		}
 		return new InsertRowsCoordinatorStandard( this, rowMutationOperations );
 	}
 
@@ -474,6 +469,10 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			return new UpdateRowsCoordinatorNoOp( this );
 		}
 
+		if ( getElementPersisterInternal() != null && getElementPersisterInternal().hasSubclasses()
+				&& getElementPersisterInternal() instanceof UnionSubclassEntityPersister ) {
+			return new UpdateRowsCoordinatorTablePerSubclass( this, rowMutationOperations, getFactory() );
+		}
 		return new UpdateRowsCoordinatorOneToMany( this, getRowMutationOperations(), getFactory() );
 	}
 
@@ -488,6 +487,11 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			return new DeleteRowsCoordinatorNoOp( this );
 		}
 
+
+		if ( getElementPersisterInternal() != null && getElementPersisterInternal().hasSubclasses()
+				&& getElementPersisterInternal() instanceof UnionSubclassEntityPersister ) {
+			return new DeleteRowsCoordinatorTablePerSubclass( this, rowMutationOperations, false );
+		}
 		return new DeleteRowsCoordinatorStandard(
 				this,
 				rowMutationOperations,
@@ -507,6 +511,10 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			return new RemoveCoordinatorNoOp( this );
 		}
 
+		if ( getElementPersisterInternal() != null && getElementPersisterInternal().hasSubclasses()
+				&& getElementPersisterInternal() instanceof UnionSubclassEntityPersister ) {
+			return new RemoveCoordinatorTablePerSubclass( this, this::buildDeleteAllOperation );
+		}
 		return new RemoveCoordinatorStandard( this, this::buildDeleteAllOperation );
 	}
 
@@ -584,7 +592,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 		}
 
 		// set the value for each index column to null
-		if ( hasIndex && !indexContainsFormula ) {
+		if ( hasIndex() && !indexContainsFormula ) {
 			final CollectionPart indexDescriptor = getAttributeMapping().getIndexDescriptor();
 			assert indexDescriptor != null;
 
@@ -619,10 +627,24 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			Object rowValue,
 			int rowPosition,
 			SharedSessionContractImplementor session,
-			JdbcValueConsumer jdbcValueConsumer) {
+			JdbcValueBindings jdbcValueBindings) {
 		final PluralAttributeMapping pluralAttribute = getAttributeMapping();
-		pluralAttribute.getKeyDescriptor().decompose( keyValue, jdbcValueConsumer, session );
-		pluralAttribute.getElementDescriptor().decompose( rowValue, jdbcValueConsumer, session );
+		pluralAttribute.getKeyDescriptor().decompose(
+				keyValue,
+				0,
+				jdbcValueBindings,
+				null,
+				RowMutationOperations.DEFAULT_RESTRICTOR,
+				session
+		);
+		pluralAttribute.getElementDescriptor().decompose(
+				rowValue,
+				0,
+				jdbcValueBindings,
+				null,
+				RowMutationOperations.DEFAULT_RESTRICTOR,
+				session
+		);
 	}
 
 
@@ -645,7 +667,7 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 
 		final EntityCollectionPart elementDescriptor = (EntityCollectionPart) attributeMapping.getElementDescriptor();
 		final EntityMappingType elementType = elementDescriptor.getAssociatedEntityMappingType();
-		assert tableReference.getTableName().equals( elementType.getIdentifierMapping().getContainingTableExpression() );
+		assert elementType.containsTableReference( tableReference.getTableName() );
 		updateBuilder.addKeyRestrictionsLeniently( elementType.getIdentifierMapping() );
 		return (TableUpdate<JdbcMutationOperation>) updateBuilder.buildMutation();
 	}
@@ -656,21 +678,31 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			Object rowValue,
 			int rowPosition,
 			SharedSessionContractImplementor session,
-			RowMutationOperations.ValuesBindingConsumer bindingsConsumer) {
+			JdbcValueBindings jdbcValueBindings) {
 		final PluralAttributeMapping attributeMapping = getAttributeMapping();
 
-		attributeMapping.getKeyDescriptor().getKeyPart().decompose( keyValue, bindingsConsumer, session );
+		attributeMapping.getKeyDescriptor().getKeyPart().decompose(
+				keyValue,
+				0,
+				jdbcValueBindings,
+				null,
+				RowMutationOperations.DEFAULT_VALUE_SETTER,
+				session
+		);
 
 		final CollectionPart indexDescriptor = attributeMapping.getIndexDescriptor();
 
 		if ( indexDescriptor != null ) {
 			indexDescriptor.decompose(
 					incrementIndexByBase( collection.getIndex( rowValue, rowPosition, this ) ),
-					(value, jdbcValueMapping) -> {
+					0,
+					jdbcValueBindings,
+					null,
+					(valueIndex, bindings, noop, value, jdbcValueMapping) -> {
 						if ( !jdbcValueMapping.isUpdateable() ) {
 							return;
 						}
-						bindingsConsumer.consume( value, jdbcValueMapping );
+						bindings.bindValue( value, jdbcValueMapping, ParameterUsage.SET );
 					},
 					session
 			);
@@ -681,11 +713,10 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 		final EntityIdentifierMapping identifierMapping = elementDescriptor.getAssociatedEntityMappingType().getIdentifierMapping();
 		identifierMapping.decompose(
 				identifierMapping.getIdentifier( elementValue ),
-				(jdbcValue, jdbcValueMapping) -> bindingsConsumer.consumeJdbcValueBinding(
-						jdbcValue,
-						jdbcValueMapping,
-						ParameterUsage.RESTRICT
-				),
+				0,
+				jdbcValueBindings,
+				null,
+				RowMutationOperations.DEFAULT_RESTRICTOR,
 				session
 		);
 	}
@@ -752,16 +783,19 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			Object entry,
 			int entryPosition,
 			SharedSessionContractImplementor session,
-			RowMutationOperations.ValuesBindingConsumer bindingsConsumer) {
+			JdbcValueBindings jdbcValueBindings) {
 		final Object index = collection.getIndex( entry, entryPosition, this );
 
 		getAttributeMapping().getIndexDescriptor().decompose(
 				index,
-				(jdbcValue, jdbcValueMapping) -> {
+				0,
+				jdbcValueBindings,
+				null,
+				(valueIndex, bindings, noop, jdbcValue, jdbcValueMapping) -> {
 					if ( !jdbcValueMapping.isUpdateable() ) {
 						return;
 					}
-					bindingsConsumer.consume( jdbcValue, jdbcValueMapping );
+					bindings.bindValue( jdbcValue, jdbcValueMapping, ParameterUsage.SET );
 				},
 				session
 		);
@@ -773,16 +807,30 @@ public class OneToManyPersister extends AbstractCollectionPersister {
 			Object entry,
 			int entryPosition,
 			SharedSessionContractImplementor session,
-			JdbcValueConsumer jdbcValueConsumer) {
+			JdbcValueBindings jdbcValueBindings) {
 		final OneToManyCollectionPart elementDescriptor = (OneToManyCollectionPart) getAttributeMapping().getElementDescriptor();
 		final EntityMappingType associatedType = elementDescriptor.getAssociatedEntityMappingType();
 		final Object element = collection.getElement( entry );
 		final Object elementIdentifier = associatedType.getIdentifierMapping().getIdentifier( element );
-		associatedType.getIdentifierMapping().decompose( elementIdentifier, jdbcValueConsumer, session );
+		associatedType.getIdentifierMapping().decompose(
+				elementIdentifier,
+				0,
+				jdbcValueBindings,
+				null,
+				RowMutationOperations.DEFAULT_RESTRICTOR,
+				session
+		);
 
 		if ( getAttributeMapping().getIdentifierDescriptor() != null ) {
 			final Object identifier = collection.getIdentifier( entry, entryPosition );
-			getAttributeMapping().getIdentifierDescriptor().decompose( identifier, jdbcValueConsumer, session );
+			getAttributeMapping().getIdentifierDescriptor().decompose(
+					identifier,
+					0,
+					jdbcValueBindings,
+					null,
+					RowMutationOperations.DEFAULT_RESTRICTOR,
+					session
+			);
 		}
 	}
 

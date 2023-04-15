@@ -130,39 +130,23 @@ public abstract class AbstractQuery<R>
 
 	@Override
 	public int getMaxResults() {
-		getSession().checkOpen();
-		return getQueryOptions().getLimit().getMaxRowsJpa();
+		return super.getMaxResults();
 	}
 
 	@Override
 	public QueryImplementor<R> setMaxResults(int maxResult) {
-		if ( maxResult < 0 ) {
-			throw new IllegalArgumentException( "max-results cannot be negative" );
-		}
-
-		getSession().checkOpen();
-
-		getQueryOptions().getLimit().setMaxRows( maxResult );
-
+		super.setMaxResults( maxResult );
 		return this;
 	}
 
 	@Override
 	public int getFirstResult() {
-		getSession().checkOpen();
-		return getQueryOptions().getLimit().getFirstRowJpa();
+		return super.getFirstResult();
 	}
 
 	@Override
 	public QueryImplementor<R> setFirstResult(int startPosition) {
-		getSession().checkOpen();
-
-		if ( startPosition < 0 ) {
-			throw new IllegalArgumentException( "first-result value cannot be negative : " + startPosition );
-		}
-
-		getQueryOptions().getLimit().setFirstRow( startPosition );
-
+		super.setFirstResult( startPosition );
 		return this;
 	}
 
@@ -263,7 +247,7 @@ public abstract class AbstractQuery<R>
 	@Override
 	public LockModeType getLockMode() {
 		getSession().checkOpen( false );
-		return LockModeTypeHelper.getLockModeType( getQueryOptions().getLockOptions().getLockMode() );
+		return super.getLockMode();
 	}
 
 	@Override
@@ -281,18 +265,18 @@ public abstract class AbstractQuery<R>
 	@Override
 	public QueryImplementor<R> setLockMode(LockModeType lockModeType) {
 		getSession().checkOpen();
-		getQueryOptions().getLockOptions().setLockMode( LockModeTypeHelper.getLockMode( lockModeType ) );
+		super.setHibernateLockMode( LockModeTypeHelper.getLockMode( lockModeType ) );
 		return this;
 	}
 
 	@Override
 	public String getComment() {
-		return getQueryOptions().getComment();
+		return super.getComment();
 	}
 
 	@Override
 	public QueryImplementor<R> setComment(String comment) {
-		getQueryOptions().setComment( comment );
+		super.setComment( comment );
 		return this;
 	}
 
@@ -372,8 +356,7 @@ public abstract class AbstractQuery<R>
 	@Override
 	@SuppressWarnings( {"unchecked", "rawtypes"} )
 	public Set<Parameter<?>> getParameters() {
-		getSession().checkOpen( false );
-		return (Set) getParameterMetadata().getRegistrations();
+		return super.getParameters();
 	}
 
 	@Override
@@ -525,7 +508,6 @@ public abstract class AbstractQuery<R>
 	@Override
 	public <P> QueryImplementor<R> setParameterList(int position, Collection<? extends P> values, Class<P> javaTypeClass) {
 		super.setParameterList( position, values, javaTypeClass );
-
 		return this;
 	}
 

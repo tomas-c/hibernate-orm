@@ -14,6 +14,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import org.hibernate.HibernateException;
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
@@ -172,7 +173,18 @@ public class CompoundNaturalIdMapping extends AbstractNaturalIdMapping implement
 
 	@Override
 	public int calculateHashCode(Object value) {
-		return 0;
+		if ( value == null ) {
+			return 0;
+		}
+		Object[] values = (Object[]) value;
+		int hashcode = 0;
+		for ( int i = 0; i < attributes.size(); i++ ) {
+			final Object o = values[i];
+			if ( o != null ) {
+				hashcode = 27 * hashcode + ( (JavaType) attributes.get( i ).getExpressibleJavaType() ).extractHashCode( o );
+			}
+		}
+		return hashcode;
 	}
 
 	@Override
@@ -313,22 +325,37 @@ public class CompoundNaturalIdMapping extends AbstractNaturalIdMapping implement
 	}
 
 	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
+	public <X, Y> int breakDownJdbcValues(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		int span = 0;
 		if ( domainValue == null ) {
-			attributes.forEach(
-					attributeMapping -> attributeMapping.breakDownJdbcValues( null, valueConsumer, session )
-			);
-			return;
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				span += attributes.get( i ).breakDownJdbcValues( null, offset + span, x, y, valueConsumer, session );
+			}
 		}
+		else {
+			assert domainValue instanceof Object[];
 
-		assert domainValue instanceof Object[];
+			final Object[] values = (Object[]) domainValue;
+			assert values.length == attributes.size();
 
-		final Object[] values = (Object[]) domainValue;
-		assert values.length == attributes.size();
-
-		for ( int i = 0; i < attributes.size(); i++ ) {
-			attributes.get( i ).breakDownJdbcValues( values[ i ], valueConsumer, session );
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				span += attributes.get( i ).breakDownJdbcValues(
+						values[i],
+						offset + span,
+						x,
+						y,
+						valueConsumer,
+						session
+				);
+			}
 		}
+		return span;
 	}
 
 	@Override
@@ -370,6 +397,9 @@ public class CompoundNaturalIdMapping extends AbstractNaturalIdMapping implement
 
 	@Override
 	public Object disassemble(Object value, SharedSessionContractImplementor session) {
+		if ( value == null ) {
+			return null;
+		}
 		assert value instanceof Object[];
 
 		final Object[] incoming = (Object[]) value;
@@ -386,38 +416,91 @@ public class CompoundNaturalIdMapping extends AbstractNaturalIdMapping implement
 	}
 
 	@Override
-	public int forEachDisassembledJdbcValue(
+	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
+		if ( value == null ) {
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				attributes.get( i ).addToCacheKey( cacheKey, null, session );
+			}
+		}
+		else {
+			assert value instanceof Object[];
+
+			final Object[] values = (Object[]) value;
+			assert values.length == attributes.size();
+
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				attributes.get( i ).addToCacheKey( cacheKey, values[i], session );
+			}
+		}
+	}
+
+	@Override
+	public <X, Y> int forEachDisassembledJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		assert value instanceof Object[];
-
-		final Object[] incoming = (Object[]) value;
-		assert incoming.length == attributes.size();
 		int span = 0;
-		for ( int i = 0; i < attributes.size(); i++ ) {
-			final SingularAttributeMapping attribute = attributes.get( i );
-			span += attribute.forEachDisassembledJdbcValue( incoming[ i ], span + offset, valuesConsumer, session );
+		if ( value == null ) {
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				final SingularAttributeMapping attribute = attributes.get( i );
+				span += attribute.forEachDisassembledJdbcValue(
+						null,
+						span + offset,
+						x,
+						y,
+						valuesConsumer,
+						session
+				);
+			}
+		}
+		else {
+			assert value instanceof Object[];
+
+			final Object[] incoming = (Object[]) value;
+			assert incoming.length == attributes.size();
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				final SingularAttributeMapping attribute = attributes.get( i );
+				span += attribute.forEachDisassembledJdbcValue(
+						incoming[i],
+						span + offset,
+						x,
+						y,
+						valuesConsumer,
+						session
+				);
+			}
 		}
 		return span;
 	}
 
 	@Override
-	public int forEachJdbcValue(
+	public <X, Y> int forEachJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		assert value instanceof Object[];
-
-		final Object[] incoming = (Object[]) value;
-		assert incoming.length == attributes.size();
-
 		int span = 0;
-		for ( int i = 0; i < attributes.size(); i++ ) {
-			final SingularAttributeMapping attribute = attributes.get( i );
-			span += attribute.forEachJdbcValue( incoming[ i ], span + offset, valuesConsumer, session );
+		if ( value == null ) {
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				final SingularAttributeMapping attribute = attributes.get( i );
+				span += attribute.forEachJdbcValue( null, span + offset, x, y, valuesConsumer, session );
+			}
+		}
+		else {
+			assert value instanceof Object[];
+
+			final Object[] incoming = (Object[]) value;
+			assert incoming.length == attributes.size();
+
+			for ( int i = 0; i < attributes.size(); i++ ) {
+				final SingularAttributeMapping attribute = attributes.get( i );
+				span += attribute.forEachJdbcValue( incoming[i], span + offset, x, y, valuesConsumer, session );
+			}
 		}
 		return span;
 	}

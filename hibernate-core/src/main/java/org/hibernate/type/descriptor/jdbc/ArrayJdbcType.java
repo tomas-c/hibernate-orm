@@ -24,6 +24,8 @@ import org.hibernate.type.descriptor.ValueBinder;
 import org.hibernate.type.descriptor.ValueExtractor;
 import org.hibernate.type.descriptor.WrapperOptions;
 import org.hibernate.type.descriptor.java.BasicPluralJavaType;
+import org.hibernate.type.descriptor.java.ByteArrayJavaType;
+import org.hibernate.type.descriptor.java.ByteJavaType;
 import org.hibernate.type.descriptor.java.JavaType;
 import org.hibernate.type.descriptor.jdbc.internal.JdbcLiteralFormatterArray;
 import org.hibernate.type.spi.TypeConfiguration;
@@ -37,19 +39,6 @@ import org.hibernate.type.spi.TypeConfiguration;
 public class ArrayJdbcType implements JdbcType {
 
 	public static final ArrayJdbcType INSTANCE = new ArrayJdbcType( ObjectJdbcType.INSTANCE );
-	private static final ClassValue<Method> NAME_BINDER = new ClassValue<>() {
-		@Override
-		protected Method computeValue(Class<?> type) {
-			try {
-				return type.getMethod( "setArray", String.class, java.sql.Array.class );
-			}
-			catch ( Exception ex ) {
-				// add logging? Did we get NoSuchMethodException or SecurityException?
-				// Doesn't matter which. We can't use it.
-			}
-			return null;
-		}
-	};
 
 	private final JdbcType elementJdbcType;
 
@@ -99,9 +88,17 @@ public class ArrayJdbcType implements JdbcType {
 
 	@Override
 	public <T> JdbcLiteralFormatter<T> getJdbcLiteralFormatter(JavaType<T> javaTypeDescriptor) {
-		//noinspection unchecked
-		final BasicPluralJavaType<T> basicPluralJavaType = (BasicPluralJavaType<T>) javaTypeDescriptor;
-		final JdbcLiteralFormatter<T> elementFormatter = elementJdbcType.getJdbcLiteralFormatter( basicPluralJavaType.getElementJavaType() );
+		final JavaType<T> elementJavaType;
+		if ( javaTypeDescriptor instanceof ByteArrayJavaType ) {
+			// Special handling needed for Byte[], because that would conflict with the VARBINARY mapping
+			//noinspection unchecked
+			elementJavaType = (JavaType<T>) ByteJavaType.INSTANCE;
+		}
+		else {
+			//noinspection unchecked
+			elementJavaType = ( (BasicPluralJavaType<T>) javaTypeDescriptor ).getElementJavaType();
+		}
+		final JdbcLiteralFormatter<T> elementFormatter = elementJdbcType.getJdbcLiteralFormatter( elementJavaType );
 		return new JdbcLiteralFormatterArray<>( javaTypeDescriptor, elementFormatter );
 	}
 
@@ -112,47 +109,31 @@ public class ArrayJdbcType implements JdbcType {
 
 	@Override
 	public <X> ValueBinder<X> getBinder(final JavaType<X> javaTypeDescriptor) {
-		//noinspection unchecked
-		final BasicPluralJavaType<X> containerJavaType = (BasicPluralJavaType<X>) javaTypeDescriptor;
 		return new BasicBinder<X>( javaTypeDescriptor, this ) {
 
 			@Override
 			protected void doBind(PreparedStatement st, X value, int index, WrapperOptions options) throws SQLException {
-				final java.sql.Array arr = getArray( value, containerJavaType, options );
+				final java.sql.Array arr = getArray( value, options );
 				st.setArray( index, arr );
 			}
 
 			@Override
 			protected void doBind(CallableStatement st, X value, String name, WrapperOptions options)
 					throws SQLException {
-				final java.sql.Array arr = getArray( value, containerJavaType, options );
-				final Method nameBinder = NAME_BINDER.get( st.getClass() );
-				if ( nameBinder == null ) {
-					try {
-						st.setObject( name, arr, java.sql.Types.ARRAY );
-						return;
-					}
-					catch (SQLException ex) {
-						throw new HibernateException( "JDBC driver does not support named parameters for setArray. Use positional.", ex );
-					}
-				}
-				// Note that it's supposed to have setArray(String,Array) by standard.
-				// There are numerous missing methods that only have versions for positional parameter,
-				// but not named ones.
-
+				final java.sql.Array arr = getArray( value, options );
 				try {
-					nameBinder.invoke( st, name, arr );
+					st.setObject( name, arr, java.sql.Types.ARRAY );
 				}
-				catch ( Throwable t ) {
-					throw new HibernateException( t );
+				catch (SQLException ex) {
+					throw new HibernateException( "JDBC driver does not support named parameters for setArray. Use positional.", ex );
 				}
 			}
 
 			private java.sql.Array getArray(
 					X value,
-					BasicPluralJavaType<X> containerJavaType,
 					WrapperOptions options) throws SQLException {
 				final TypeConfiguration typeConfiguration = options.getSessionFactory().getTypeConfiguration();
+				final JdbcType elementJdbcType = ( (ArrayJdbcType) getJdbcType() ).getElementJdbcType();
 				final JdbcType underlyingJdbcType = typeConfiguration.getJdbcTypeRegistry()
 						.getDescriptor( elementJdbcType.getDefaultSqlTypeCode() );
 				final Class<?> preferredJavaTypeClass = elementJdbcType.getPreferredJavaTypeClass( options );
@@ -172,15 +153,31 @@ public class ArrayJdbcType implements JdbcType {
 						elementJdbcJavaTypeClass,
 						0
 				).getClass();
-				final Object[] objects = javaTypeDescriptor.unwrap( value, arrayClass, options );
+				final Object[] objects = getJavaType().unwrap( value, arrayClass, options );
 
 				final SharedSessionContractImplementor session = options.getSession();
 				// TODO: ideally, we would have the actual size or the actual type/column accessible
 				//  this is something that we would need for supporting composite types anyway
+				final JavaType<X> elementJavaType;
+				if ( getJavaType() instanceof ByteArrayJavaType ) {
+					// Special handling needed for Byte[], because that would conflict with the VARBINARY mapping
+					//noinspection unchecked
+					elementJavaType = (JavaType<X>) ByteJavaType.INSTANCE;
+				}
+				else {
+					//noinspection unchecked
+					elementJavaType = ( (BasicPluralJavaType<X>) getJavaType() ).getElementJavaType();
+				}
 				final Size size = session.getJdbcServices()
 						.getDialect()
 						.getSizeStrategy()
-						.resolveSize( elementJdbcType, containerJavaType.getElementJavaType(), null, null, null );
+						.resolveSize(
+								elementJdbcType,
+								elementJavaType,
+								null,
+								null,
+								null
+						);
 				String typeName = session.getTypeConfiguration()
 						.getDdlTypeRegistry()
 						.getDescriptor( elementJdbcType.getDdlTypeCode() )

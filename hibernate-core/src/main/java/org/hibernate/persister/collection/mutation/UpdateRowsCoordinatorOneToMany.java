@@ -53,11 +53,14 @@ public class UpdateRowsCoordinatorOneToMany extends AbstractUpdateRowsCoordinato
 	}
 
 	private void deleteRows(Object key, PersistentCollection<?> collection, SharedSessionContractImplementor session) {
-		final MutationOperationGroupSingle operationGroup = resolveDeleteGroup();
-
 		final PluralAttributeMapping attributeMapping = getMutationTarget().getTargetPart();
 		final CollectionPersister collectionDescriptor = attributeMapping.getCollectionDescriptor();
+		final Iterator<?> entries = collection.entries( collectionDescriptor );
+		if ( !entries.hasNext() ) {
+			return;
+		}
 
+		final MutationOperationGroupSingle operationGroup = resolveDeleteGroup();
 		final MutationExecutorService mutationExecutorService = session
 				.getFactory()
 				.getServiceRegistry()
@@ -71,7 +74,6 @@ public class UpdateRowsCoordinatorOneToMany extends AbstractUpdateRowsCoordinato
 		try {
 			final JdbcValueBindings jdbcValueBindings = mutationExecutor.getJdbcValueBindings();
 
-			final Iterator<?> entries = collection.entries( collectionDescriptor );
 			int entryPosition = -1;
 
 			while ( entries.hasNext() ) {
@@ -81,21 +83,18 @@ public class UpdateRowsCoordinatorOneToMany extends AbstractUpdateRowsCoordinato
 				if ( !collection.needsUpdating( entry, entryPosition, attributeMapping ) ) {
 					continue;
 				}
+				final Object entryToUpdate = collection.getSnapshotElement( entry, entryPosition );
 
 				rowMutationOperations.getDeleteRowRestrictions().applyRestrictions(
 						collection,
 						key,
-						entry,
+						entryToUpdate,
 						entryPosition,
 						session,
-						(jdbcValue, jdbcValueMapping) -> jdbcValueBindings.bindValue(
-								jdbcValue,
-								jdbcValueMapping,
-								ParameterUsage.RESTRICT
-						)
+						jdbcValueBindings
 				);
 
-				mutationExecutor.execute( entry, null, null, null, session );
+				mutationExecutor.execute( entryToUpdate, null, null, null, session );
 			}
 		}
 		finally {
@@ -115,11 +114,14 @@ public class UpdateRowsCoordinatorOneToMany extends AbstractUpdateRowsCoordinato
 	}
 
 	private int insertRows(Object key, PersistentCollection<?> collection, SharedSessionContractImplementor session) {
-		final MutationOperationGroupSingle operationGroup = resolveInsertGroup();
-
 		final PluralAttributeMapping attributeMapping = getMutationTarget().getTargetPart();
 		final CollectionPersister collectionDescriptor = attributeMapping.getCollectionDescriptor();
+		final Iterator<?> entries = collection.entries( collectionDescriptor );
+		if ( !entries.hasNext() ) {
+			return -1;
+		}
 
+		final MutationOperationGroupSingle operationGroup = resolveInsertGroup();
 		final MutationExecutorService mutationExecutorService = session
 				.getFactory()
 				.getServiceRegistry()
@@ -133,7 +135,6 @@ public class UpdateRowsCoordinatorOneToMany extends AbstractUpdateRowsCoordinato
 		try {
 			final JdbcValueBindings jdbcValueBindings = mutationExecutor.getJdbcValueBindings();
 
-			final Iterator<?> entries = collection.entries( collectionDescriptor );
 			int entryPosition = -1;
 
 			while ( entries.hasNext() ) {
@@ -150,11 +151,7 @@ public class UpdateRowsCoordinatorOneToMany extends AbstractUpdateRowsCoordinato
 						entry,
 						entryPosition,
 						session,
-						(jdbcValue, jdbcValueMapping, usage) -> jdbcValueBindings.bindValue(
-								jdbcValue,
-								jdbcValueMapping,
-								usage
-						)
+						jdbcValueBindings
 				);
 
 				mutationExecutor.execute( entry, null, null, null, session );

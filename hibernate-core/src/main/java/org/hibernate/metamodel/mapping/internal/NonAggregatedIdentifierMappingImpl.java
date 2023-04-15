@@ -9,6 +9,7 @@ package org.hibernate.metamodel.mapping.internal;
 import java.util.List;
 import java.util.function.BiConsumer;
 
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.spi.EntityKey;
 import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
@@ -148,12 +149,17 @@ public class NonAggregatedIdentifierMappingImpl extends AbstractCompositeIdentif
 	}
 
 	@Override
-	public int forEachJdbcValue(
+	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
+		identifierValueMapper.addToCacheKey( cacheKey, value, session );
+	}
+
+	@Override
+	public <X, Y> int forEachJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x, Y y, JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		return identifierValueMapper.forEachJdbcValue( value, offset, valuesConsumer, session );
+		return identifierValueMapper.forEachJdbcValue( value, offset, x, y, valuesConsumer, session );
 	}
 
 	@Override
@@ -284,8 +290,13 @@ public class NonAggregatedIdentifierMappingImpl extends AbstractCompositeIdentif
 	}
 
 	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		identifierValueMapper.breakDownJdbcValues( domainValue, valueConsumer, session );
+	public <X, Y> int breakDownJdbcValues(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer, SharedSessionContractImplementor session) {
+		return identifierValueMapper.breakDownJdbcValues( domainValue, offset, x, y, valueConsumer, session );
 	}
 
 	@Override

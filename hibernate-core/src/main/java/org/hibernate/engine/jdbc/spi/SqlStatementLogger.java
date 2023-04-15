@@ -10,6 +10,8 @@ import org.hibernate.engine.jdbc.internal.FormatStyle;
 import org.hibernate.engine.jdbc.internal.Formatter;
 import org.hibernate.internal.CoreLogging;
 import org.hibernate.internal.build.AllowSysOut;
+import org.hibernate.service.Service;
+
 import org.jboss.logging.Logger;
 
 import java.sql.Statement;
@@ -21,7 +23,7 @@ import java.util.function.Supplier;
  *
  * @author Steve Ebersole
  */
-public class SqlStatementLogger {
+public class SqlStatementLogger implements Service {
 	private static final Logger LOG = CoreLogging.logger( "org.hibernate.SQL" );
 	private static final Logger LOG_SLOW = CoreLogging.logger( "org.hibernate.SQL_SLOW" );
 
@@ -112,19 +114,22 @@ public class SqlStatementLogger {
 	 */
 	@AllowSysOut
 	public void logStatement(String statement, Formatter formatter) {
-		if ( logToStdout || LOG.isDebugEnabled() ) {
-			try {
-				if ( format ) {
-					statement = formatter.format( statement );
-				}
-				if ( highlight ) {
-					statement = FormatStyle.HIGHLIGHT.getFormatter().format( statement );
-				}
+		if ( !logToStdout && !LOG.isDebugEnabled() ) {
+			return;
+		}
+
+		try {
+			if ( format ) {
+				statement = formatter.format( statement );
 			}
-			catch (RuntimeException ex) {
-				LOG.warn( "Couldn't format statement", ex );
+			if ( highlight ) {
+				statement = FormatStyle.HIGHLIGHT.getFormatter().format( statement );
 			}
 		}
+		catch (RuntimeException ex) {
+			LOG.warn( "Couldn't format statement", ex );
+		}
+
 		LOG.debug( statement );
 		if ( logToStdout ) {
 			String prefix = highlight ? "\u001b[35m[Hibernate]\u001b[0m " : "Hibernate: ";

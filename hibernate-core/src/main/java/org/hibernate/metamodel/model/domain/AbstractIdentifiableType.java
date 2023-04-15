@@ -414,8 +414,11 @@ public abstract class AbstractIdentifiableType<J>
 			if ( type instanceof BasicDomainType ) {
 				return new BasicSqmPathSource<>(
 						EntityIdentifierMapping.ROLE_LOCAL_NAME,
+						(SqmPathSource) id,
 						(BasicDomainType<?>) type,
-						Bindable.BindableType.SINGULAR_ATTRIBUTE
+						type.getExpressibleJavaType(),
+						Bindable.BindableType.SINGULAR_ATTRIBUTE,
+						id.isGeneric()
 				);
 			}
 			else {
@@ -423,8 +426,10 @@ public abstract class AbstractIdentifiableType<J>
 				final EmbeddableDomainType<?> compositeType = (EmbeddableDomainType<?>) type;
 				return new EmbeddedSqmPathSource<>(
 						EntityIdentifierMapping.ROLE_LOCAL_NAME,
+						(SqmPathSource) id,
 						compositeType,
-						Bindable.BindableType.SINGULAR_ATTRIBUTE
+						Bindable.BindableType.SINGULAR_ATTRIBUTE,
+						id.isGeneric()
 				);
 			}
 		}
@@ -433,6 +438,7 @@ public abstract class AbstractIdentifiableType<J>
 			if ( idClassType == null ) {
 				return new NonAggregatedCompositeSqmPathSource<>(
 						EntityIdentifierMapping.ROLE_LOCAL_NAME,
+						null,
 						Bindable.BindableType.SINGULAR_ATTRIBUTE,
 						this
 				);
@@ -440,8 +446,10 @@ public abstract class AbstractIdentifiableType<J>
 			else {
 				return new EmbeddedSqmPathSource<>(
 						EntityIdentifierMapping.ROLE_LOCAL_NAME,
+						null,
 						idClassType,
-						Bindable.BindableType.SINGULAR_ATTRIBUTE
+						Bindable.BindableType.SINGULAR_ATTRIBUTE,
+						false
 				);
 			}
 		}

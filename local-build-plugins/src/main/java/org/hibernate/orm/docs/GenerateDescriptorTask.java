@@ -31,6 +31,8 @@ public abstract class GenerateDescriptorTask extends DefaultTask {
 
 		jsonFile = config.getUpdatedJsonFile();
 		currentlyBuildingFamily = config.getReleaseFamilyIdentifier();
+
+		getInputs().property( "hibernate-version", currentlyBuildingFamily );
 	}
 
 	@OutputFile

@@ -56,6 +56,7 @@ public abstract class AbstractManagedType<J>
 
 	private final Map<String, SingularPersistentAttribute<J, ?>> declaredSingularAttributes = new LinkedHashMap<>();
 	private volatile Map<String, PluralPersistentAttribute<J, ?, ?>> declaredPluralAttributes ;
+	private volatile Map<String, PersistentAttribute<J, ?>> declaredConcreteGenericAttributes;
 
 	private final List<ManagedDomainType> subTypes = new ArrayList<>();
 
@@ -465,6 +466,24 @@ public abstract class AbstractManagedType<J>
 
 
 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// Generic attributes
+
+	@Override
+	public PersistentAttribute<? super J, ?> findConcreteGenericAttribute(String name) {
+		PersistentAttribute<? super J, ?> attribute = findDeclaredConcreteGenericAttribute( name );
+		if ( attribute == null && getSuperType() != null ) {
+			attribute = getSuperType().findDeclaredConcreteGenericAttribute( name );
+		}
+		return attribute;
+	}
+
+	@Override
+	public PersistentAttribute<? super J, ?> findDeclaredConcreteGenericAttribute(String name) {
+		return declaredConcreteGenericAttributes == null ? null : declaredConcreteGenericAttributes.get( name );
+	}
+
+
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 	// Bags
 
 	@Override
@@ -738,6 +757,14 @@ public abstract class AbstractManagedType<J>
 						"Unable to classify attribute as singular or plural [" + attribute + "] for `" + this + '`'
 				);
 			}
+		}
+
+		@Override
+		public void addConcreteGenericAttribute(PersistentAttribute<J, ?> attribute) {
+			if ( declaredConcreteGenericAttributes == null ) {
+				declaredConcreteGenericAttributes = new HashMap<>();
+			}
+			declaredConcreteGenericAttributes.put( attribute.getName(), attribute );
 		}
 
 		@Override

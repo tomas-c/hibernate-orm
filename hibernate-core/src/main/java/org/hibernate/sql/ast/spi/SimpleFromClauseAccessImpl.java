@@ -9,12 +9,11 @@ package org.hibernate.sql.ast.spi;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.hibernate.metamodel.mapping.EmbeddableValuedModelPart;
 import org.hibernate.metamodel.model.domain.NavigableRole;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.ast.SqlTreeCreationLogger;
+import org.hibernate.sql.ast.tree.from.CorrelatedTableGroup;
 import org.hibernate.sql.ast.tree.from.TableGroup;
-import org.hibernate.sql.ast.tree.from.VirtualTableGroup;
 
 import org.jboss.logging.Logger;
 
@@ -52,33 +51,41 @@ public class SimpleFromClauseAccessImpl implements FromClauseAccess {
 
 	@Override
 	public TableGroup findTableGroupForGetOrCreate(NavigablePath navigablePath) {
-		final TableGroup tableGroup = findTableGroup( navigablePath );
-		if ( parent != null && tableGroup instanceof VirtualTableGroup && tableGroup.getModelPart() instanceof EmbeddableValuedModelPart ) {
-			final NavigableRole navigableRole = tableGroup.getModelPart().getNavigableRole();
-			if ( navigableRole != null ) {
-				// Traverse up the navigable path to the point where resolving the path leads us to a regular TableGroup
-				NavigableRole parentRole = navigableRole.getParent();
-				NavigablePath parentPath = navigablePath.getParent();
-				while ( parentRole.getParent() != null ) {
-					parentRole = parentRole.getParent();
-					parentPath = parentPath.getParent();
-				}
-				// Only return the TableGroup if its regular parent TableGroup corresponds to the underlying one
-				if ( findTableGroup( parentPath ) == getUnderlyingTableGroup( (VirtualTableGroup) tableGroup ) ) {
-					return tableGroup;
-				}
-				else {
-					return null;
+		final TableGroup localTableGroup = tableGroupMap.get( navigablePath );
+		if ( localTableGroup != null || parent == null ) {
+			return localTableGroup;
+		}
+		else {
+			final TableGroup tableGroup = parent.findTableGroup( navigablePath );
+			if ( tableGroup != null && navigablePath.getParent() != null ) {
+				final NavigableRole navigableRole = tableGroup.getModelPart().getNavigableRole();
+				if ( navigableRole.getParent() != null ) {
+					// Traverse up the navigable path to the point where resolving the path leads us to the parent TableGroup
+					NavigableRole parentRole = navigableRole.getParent();
+					NavigablePath parentPath = navigablePath.getParent();
+					while ( parentRole.getParent() != null ) {
+						parentRole = parentRole.getParent();
+						parentPath = parentPath.getParent();
+					}
+					final TableGroup parentFound = parent.findTableGroup( parentPath );
+					// Only return the TableGroup if there's no corresponding group in the parent FromClauseAccess
+					// or if there is one, but it's the same or correlated to the locally found one.
+					if ( parentFound == null || getCorrelatedTableGroup( parentFound ) == getCorrelatedTableGroup(
+							tableGroupMap.get( parentPath ) ) ) {
+						return tableGroup;
+					}
+					else {
+						return null;
+					}
 				}
 			}
+			return tableGroup;
 		}
-		return tableGroup;
 	}
 
-	private TableGroup getUnderlyingTableGroup(VirtualTableGroup virtualTableGroup) {
-		final TableGroup tableGroup = virtualTableGroup.getUnderlyingTableGroup();
-		if ( tableGroup instanceof VirtualTableGroup ) {
-			return getUnderlyingTableGroup( (VirtualTableGroup) tableGroup );
+	private TableGroup getCorrelatedTableGroup(TableGroup tableGroup) {
+		if ( tableGroup instanceof CorrelatedTableGroup ) {
+			return getCorrelatedTableGroup( ( (CorrelatedTableGroup) tableGroup ).getCorrelatedTableGroup() );
 		}
 		return tableGroup;
 	}

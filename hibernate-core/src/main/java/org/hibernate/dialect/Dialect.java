@@ -40,7 +40,6 @@ import java.util.TimeZone;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
-import org.hibernate.AssertionFailure;
 import org.hibernate.Incubating;
 import org.hibernate.Length;
 import org.hibernate.LockMode;
@@ -137,12 +136,15 @@ import org.hibernate.query.sqm.mutation.internal.temptable.PersistentTableInsert
 import org.hibernate.query.sqm.mutation.internal.temptable.PersistentTableMutationStrategy;
 import org.hibernate.query.sqm.mutation.spi.SqmMultiTableInsertStrategy;
 import org.hibernate.query.sqm.mutation.spi.SqmMultiTableMutationStrategy;
+import org.hibernate.query.sqm.mutation.spi.SqmMultiTableMutationStrategyProvider;
 import org.hibernate.query.sqm.sql.SqmTranslatorFactory;
 import org.hibernate.service.ServiceRegistry;
 import org.hibernate.service.spi.ServiceRegistryImplementor;
 import org.hibernate.sql.ForUpdateFragment;
 import org.hibernate.sql.ast.SqlAstNodeRenderingMode;
 import org.hibernate.sql.ast.SqlAstTranslatorFactory;
+import org.hibernate.sql.ast.internal.ParameterMarkerStrategyStandard;
+import org.hibernate.sql.ast.spi.ParameterMarkerStrategy;
 import org.hibernate.sql.ast.spi.SqlAppender;
 import org.hibernate.sql.ast.spi.StringBuilderSqlAppender;
 import org.hibernate.sql.model.MutationOperation;
@@ -175,14 +177,16 @@ import org.hibernate.type.descriptor.java.PrimitiveByteArrayJavaType;
 import org.hibernate.type.descriptor.jdbc.ArrayJdbcType;
 import org.hibernate.type.descriptor.jdbc.BlobJdbcType;
 import org.hibernate.type.descriptor.jdbc.ClobJdbcType;
-import org.hibernate.type.descriptor.jdbc.InstantAsTimestampJdbcType;
-import org.hibernate.type.descriptor.jdbc.InstantAsTimestampWithTimeZoneJdbcType;
+import org.hibernate.type.descriptor.jdbc.TimeUtcAsOffsetTimeJdbcType;
+import org.hibernate.type.descriptor.jdbc.TimestampUtcAsJdbcTimestampJdbcType;
+import org.hibernate.type.descriptor.jdbc.TimestampUtcAsOffsetDateTimeJdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcLiteralFormatter;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 import org.hibernate.type.descriptor.jdbc.LongNVarcharJdbcType;
 import org.hibernate.type.descriptor.jdbc.NCharJdbcType;
 import org.hibernate.type.descriptor.jdbc.NClobJdbcType;
 import org.hibernate.type.descriptor.jdbc.NVarcharJdbcType;
+import org.hibernate.type.descriptor.jdbc.TimeUtcAsJdbcTimeJdbcType;
 import org.hibernate.type.descriptor.jdbc.spi.JdbcTypeRegistry;
 import org.hibernate.type.descriptor.sql.internal.CapacityDependentDdlType;
 import org.hibernate.type.descriptor.sql.internal.DdlTypeImpl;
@@ -226,6 +230,7 @@ import static org.hibernate.type.SqlTypes.TIME;
 import static org.hibernate.type.SqlTypes.TIMESTAMP;
 import static org.hibernate.type.SqlTypes.TIMESTAMP_UTC;
 import static org.hibernate.type.SqlTypes.TIMESTAMP_WITH_TIMEZONE;
+import static org.hibernate.type.SqlTypes.TIME_UTC;
 import static org.hibernate.type.SqlTypes.TIME_WITH_TIMEZONE;
 import static org.hibernate.type.SqlTypes.TINYINT;
 import static org.hibernate.type.SqlTypes.VARBINARY;
@@ -259,8 +264,8 @@ import static org.hibernate.type.descriptor.DateTimeUtils.appendAsTimestampWithN
  * <ul>
  *     <li>{@link #columnType(int)} to define a mapping from SQL
  *     {@linkplain SqlTypes type codes} to database column types, and
- *     <li>{@link #initializeFunctionRegistry(FunctionContributions)} to register
- *     mappings for standard HQL functions with the
+ *     <li>{@link #initializeFunctionRegistry(FunctionContributions)} to
+ *     register mappings for standard HQL functions with the
  *     {@link org.hibernate.query.sqm.function.SqmFunctionRegistry}.
  * </ul>
  * <p>
@@ -275,7 +280,7 @@ import static org.hibernate.type.descriptor.DateTimeUtils.appendAsTimestampWithN
  * passed to the constructor, and by the {@link #getVersion()} property.
  * <p>
  * Programs using Hibernate should migrate away from the use of versioned
- * dialect classes like, for example, {@link PostgreSQL95Dialect}. These
+ * dialect classes like, for example, {@link MySQL8Dialect}. These
  * classes are now deprecated and will be removed in a future release.
  * <p>
  * A custom {@code Dialect} may be specified using the configuration
@@ -401,6 +406,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 		ddlTypeRegistry.addDescriptor( simpleSqlType( DATE ) );
 		ddlTypeRegistry.addDescriptor( simpleSqlType( TIME ) );
 		ddlTypeRegistry.addDescriptor( simpleSqlType( TIME_WITH_TIMEZONE ) );
+		ddlTypeRegistry.addDescriptor( simpleSqlType( TIME_UTC ) );
 		ddlTypeRegistry.addDescriptor( simpleSqlType( TIMESTAMP ) );
 		ddlTypeRegistry.addDescriptor( simpleSqlType( TIMESTAMP_WITH_TIMEZONE ) );
 		ddlTypeRegistry.addDescriptor( simpleSqlType( TIMESTAMP_UTC ) );
@@ -531,17 +537,21 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 			case DATE:
 				return "date";
 			case TIME:
-				return "time";
+				return "time($p)";
 			case TIME_WITH_TIMEZONE:
 				// type included here for completeness but note that
 				// very few databases support it, and the general
 				// advice is to caution against its use (for reasons,
 				// check the comments in the Postgres documentation).
-				return "time with time zone";
+				return "time($p) with time zone";
 			case TIMESTAMP:
 				return "timestamp($p)";
 			case TIMESTAMP_WITH_TIMEZONE:
 				return "timestamp($p) with time zone";
+			case TIME_UTC:
+				return getTimeZoneSupport() == TimeZoneSupport.NATIVE
+						? columnType( TIME_WITH_TIMEZONE )
+						: columnType( TIME );
 			case TIMESTAMP_UTC:
 				return getTimeZoneSupport() == TimeZoneSupport.NATIVE
 						? columnType( TIMESTAMP_WITH_TIMEZONE )
@@ -598,9 +608,11 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * @see AnsiSqlKeywords
 	 */
 	protected void registerDefaultKeywords() {
-		for ( String keyword : AnsiSqlKeywords.INSTANCE.sql2003() ) {
-			registerKeyword( keyword );
-		}
+		AnsiSqlKeywords keywords = new AnsiSqlKeywords();
+		//Not using #registerKeyword as:
+		// # these are already lowercase
+		// # better efficiency of addAll as it can pre-size the collections
+		sqlKeywords.addAll( keywords.sql2003() );
 	}
 
 	/**
@@ -766,7 +778,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	@Override
-	public final void contributeFunctions(FunctionContributions functionContributions) {
+	public void contributeFunctions(FunctionContributions functionContributions) {
 		initializeFunctionRegistry( functionContributions );
 	}
 
@@ -1485,7 +1497,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 *
 	 * @see #initDefaultProperties()
 	 */
-	public final Properties getDefaultProperties() {
+	public Properties getDefaultProperties() {
 		return properties;
 	}
 
@@ -1515,14 +1527,14 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 
 	@Override
 	public String toString() {
-		return getClass().getName();
+		return getClass().getName() + ", version: " + getVersion();
 	}
 
 
 	// database type mapping support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 	@Override
-	public final void contribute(TypeContributions typeContributions, ServiceRegistry serviceRegistry) {
+	public void contribute(TypeContributions typeContributions, ServiceRegistry serviceRegistry) {
 		contributeTypes( typeContributions, serviceRegistry );
 	}
 
@@ -1552,10 +1564,12 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 		}
 
 		if ( getTimeZoneSupport() == TimeZoneSupport.NATIVE ) {
-			jdbcTypeRegistry.addDescriptor( InstantAsTimestampWithTimeZoneJdbcType.INSTANCE );
+			jdbcTypeRegistry.addDescriptor( TimestampUtcAsOffsetDateTimeJdbcType.INSTANCE );
+			jdbcTypeRegistry.addDescriptor( TimeUtcAsOffsetTimeJdbcType.INSTANCE );
 		}
 		else {
-			jdbcTypeRegistry.addDescriptor( InstantAsTimestampJdbcType.INSTANCE );
+			jdbcTypeRegistry.addDescriptor( TimestampUtcAsJdbcTimestampJdbcType.INSTANCE );
+			jdbcTypeRegistry.addDescriptor( TimeUtcAsJdbcTimeJdbcType.INSTANCE );
 		}
 
 		if ( supportsStandardArrays() ) {
@@ -1725,35 +1739,12 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 
 
 	// native identifier generation ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-	/**
-	 * The "native" id generation strategy for this dialect.
-	 * <p>
-	 * This is the id generation strategy which should be used when {@code "native"} is
-	 * specified in {@code hbm.xml}, or {@link GenerationType#AUTO} is specified by the
-	 * {@link jakarta.persistence.GeneratedValue#strategy @GeneratedValue} annotation.
-	 *
-	 * @return The native generator strategy.
-	 */
-	@Incubating
-	public GenerationType getNativeIdentifierGenerationType() {
-		switch ( getNativeIdentifierGeneratorStrategy() ) {
-			case "identity":
-				return GenerationType.IDENTITY;
-			case "sequence":
-				return GenerationType.SEQUENCE;
-			case "uuid":
-				return GenerationType.UUID;
-			default:
-				throw new AssertionFailure( "unknown native generation type" );
-		}
-	}
+	
 	/**
 	 * The name identifying the "native" id generation strategy for this dialect.
 	 * <p>
-	 * This is the id generation strategy which should be used when {@code "native"} is
-	 * specified in {@code hbm.xml}, or {@link GenerationType#AUTO} is specified by the
-	 * {@link jakarta.persistence.GeneratedValue#strategy @GeneratedValue} annotation.
+	 * This is the name of the id generation strategy which should be used when
+	 * {@code "native"} is specified in {@code hbm.xml}.
 	 *
 	 * @return The name identifying the native generator strategy.
 	 */
@@ -2492,7 +2483,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * The {@link SqmMultiTableMutationStrategy} to use when not specified by
 	 * {@link org.hibernate.query.spi.QueryEngineOptions#getCustomSqmMultiTableMutationStrategy}.
 	 *
-	 * @see org.hibernate.query.sqm.mutation.internal.SqmMutationStrategyHelper#resolveStrategy
+	 * @see SqmMultiTableMutationStrategyProvider#createMutationStrategy
 	 */
 	public SqmMultiTableMutationStrategy getFallbackSqmMutationStrategy(
 			EntityMappingType entityDescriptor,
@@ -2512,7 +2503,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * The {@link SqmMultiTableInsertStrategy} to use when not specified by
 	 * {@link org.hibernate.query.spi.QueryEngineOptions#getCustomSqmMultiTableInsertStrategy}.
 	 *
-	 * @see org.hibernate.query.sqm.mutation.internal.SqmMutationStrategyHelper#resolveInsertStrategy
+	 * @see SqmMultiTableMutationStrategyProvider#createInsertStrategy
 	 */
 	public SqmMultiTableInsertStrategy getFallbackSqmInsertStrategy(
 			EntityMappingType entityDescriptor,
@@ -3047,7 +3038,7 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	 * @see #openQuote()
 	 * @see #closeQuote()
 	 */
-	public final String quote(String name) {
+	public String quote(String name) {
 		if ( name == null ) {
 			return null;
 		}
@@ -4812,6 +4803,18 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 	}
 
 	/**
+	 * Support for native parameter markers.
+	 * <p/>
+	 * This is generally dependent on both the database and the driver.
+	 *
+	 * @return May return {@code null} to indicate that the JDBC
+	 * {@linkplain ParameterMarkerStrategyStandard standard} strategy should be used
+	 */
+	public ParameterMarkerStrategy getNativeParameterMarkerStrategy() {
+		return null;
+	}
+
+	/**
 	 * Pluggable strategy for determining the {@link Size} to use for
 	 * columns of a given SQL type.
 	 * <p>
@@ -4884,6 +4887,9 @@ public abstract class Dialect implements ConversionContext, TypeContributor, Fun
 						precision = (int) ceil( precision * LOG_BASE2OF10 );
 					}
 					break;
+				case SqlTypes.TIME:
+				case SqlTypes.TIME_WITH_TIMEZONE:
+				case SqlTypes.TIME_UTC:
 				case SqlTypes.TIMESTAMP:
 				case SqlTypes.TIMESTAMP_WITH_TIMEZONE:
 				case SqlTypes.TIMESTAMP_UTC:

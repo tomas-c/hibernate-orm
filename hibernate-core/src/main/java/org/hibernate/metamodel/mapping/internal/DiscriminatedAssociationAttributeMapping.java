@@ -12,6 +12,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import org.hibernate.SharedSessionContract;
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.FetchStyle;
 import org.hibernate.engine.FetchTiming;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
@@ -22,6 +23,7 @@ import org.hibernate.mapping.Property;
 import org.hibernate.metamodel.mapping.AttributeMetadata;
 import org.hibernate.metamodel.mapping.BasicValuedModelPart;
 import org.hibernate.metamodel.mapping.DiscriminatedAssociationModelPart;
+import org.hibernate.metamodel.mapping.DiscriminatorMapping;
 import org.hibernate.metamodel.mapping.EntityIdentifierMapping;
 import org.hibernate.metamodel.mapping.EntityMappingType;
 import org.hibernate.metamodel.mapping.JdbcMapping;
@@ -34,10 +36,8 @@ import org.hibernate.metamodel.model.domain.NavigableRole;
 import org.hibernate.property.access.spi.PropertyAccess;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.ast.SqlAstJoinType;
-import org.hibernate.sql.ast.spi.FromClauseAccess;
-import org.hibernate.sql.ast.spi.SqlAliasBaseGenerator;
-import org.hibernate.sql.ast.spi.SqlAstCreationContext;
-import org.hibernate.sql.ast.spi.SqlExpressionResolver;
+import org.hibernate.sql.ast.spi.SqlAliasBase;
+import org.hibernate.sql.ast.spi.SqlAstCreationState;
 import org.hibernate.sql.ast.spi.SqlSelection;
 import org.hibernate.sql.ast.tree.from.StandardVirtualTableGroup;
 import org.hibernate.sql.ast.tree.from.TableGroup;
@@ -103,7 +103,7 @@ public class DiscriminatedAssociationAttributeMapping
 	}
 
 	@Override
-	public BasicValuedModelPart getDiscriminatorPart() {
+	public DiscriminatorMapping getDiscriminatorMapping() {
 		return discriminatorMapping.getDiscriminatorPart();
 	}
 
@@ -237,6 +237,25 @@ public class DiscriminatedAssociationAttributeMapping
 		};
 	}
 
+	@Override
+	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
+		if ( value == null ) {
+			cacheKey.addValue( null );
+			cacheKey.addHashCode( 0 );
+		}
+		else {
+			final EntityMappingType concreteMappingType = determineConcreteType( value, session );
+
+			final Object discriminator = discriminatorMapping
+					.getModelPart()
+					.resolveDiscriminatorForEntityType( concreteMappingType );
+			discriminatorMapping.getDiscriminatorPart().addToCacheKey( cacheKey, discriminator, session );
+
+			final EntityIdentifierMapping identifierMapping = concreteMappingType.getIdentifierMapping();
+			identifierMapping.addToCacheKey( cacheKey, identifierMapping.getIdentifier( value ), session );
+		}
+	}
+
 	private EntityMappingType determineConcreteType(Object entity, SharedSessionContractImplementor session) {
 		final String entityName;
 		if ( session == null ) {
@@ -266,21 +285,43 @@ public class DiscriminatedAssociationAttributeMapping
 	}
 
 	@Override
-	public int forEachDisassembledJdbcValue(
+	public <X, Y> int forEachDisassembledJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		if ( value != null ) {
+		if ( value == null ) {
+			valuesConsumer.consume(
+					offset,
+					x,
+					y,
+					null,
+					discriminatorMapping.getDiscriminatorPart().getJdbcMapping()
+			);
+			valuesConsumer.consume(
+					offset + 1,
+					x,
+					y,
+					null,
+					discriminatorMapping.getKeyPart().getJdbcMapping()
+			);
+		}
+		else {
 			if ( value.getClass().isArray() ) {
 				final Object[] values = (Object[]) value;
 				valuesConsumer.consume(
 						offset,
+						x,
+						y,
 						values[0],
 						discriminatorMapping.getDiscriminatorPart().getJdbcMapping()
 				);
 				valuesConsumer.consume(
 						offset + 1,
+						x,
+						y,
 						values[1],
 						discriminatorMapping.getKeyPart().getJdbcMapping()
 				);
@@ -294,6 +335,8 @@ public class DiscriminatedAssociationAttributeMapping
 				final Object disassembledDiscriminator = discriminatorMapping.getDiscriminatorPart().disassemble( discriminator, session );
 				valuesConsumer.consume(
 						offset,
+						x,
+						y,
 						disassembledDiscriminator,
 						discriminatorMapping.getDiscriminatorPart().getJdbcMapping()
 				);
@@ -303,6 +346,8 @@ public class DiscriminatedAssociationAttributeMapping
 				final Object disassembledKey = discriminatorMapping.getKeyPart().disassemble( identifier, session );
 				valuesConsumer.consume(
 						offset + 1,
+						x,
+						y,
 						disassembledKey,
 						discriminatorMapping.getKeyPart().getJdbcMapping()
 				);
@@ -313,13 +358,25 @@ public class DiscriminatedAssociationAttributeMapping
 	}
 
 	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		discriminatorMapping.breakDownJdbcValues( domainValue, valueConsumer, session );
+	public <X, Y> int breakDownJdbcValues(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		return discriminatorMapping.breakDownJdbcValues( offset, x, y, domainValue, valueConsumer, session );
 	}
 
 	@Override
-	public void decompose(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		discriminatorMapping.decompose( domainValue, valueConsumer, session );
+	public <X, Y> int decompose(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		return discriminatorMapping.decompose( offset, x, y, domainValue, valueConsumer, session );
 	}
 
 	@Override
@@ -421,25 +478,21 @@ public class DiscriminatedAssociationAttributeMapping
 			NavigablePath navigablePath,
 			TableGroup lhs,
 			String explicitSourceAlias,
+			SqlAliasBase explicitSqlAliasBase,
 			SqlAstJoinType requestedJoinType,
 			boolean fetched,
 			boolean addsPredicate,
-			SqlAliasBaseGenerator aliasBaseGenerator,
-			SqlExpressionResolver sqlExpressionResolver,
-			FromClauseAccess fromClauseAccess,
-			SqlAstCreationContext creationContext) {
+			SqlAstCreationState creationState) {
 		final SqlAstJoinType joinType = Objects.requireNonNullElse( requestedJoinType, SqlAstJoinType.INNER );
 		final TableGroup tableGroup = createRootTableGroupJoin(
 				navigablePath,
 				lhs,
 				explicitSourceAlias,
+				explicitSqlAliasBase,
 				requestedJoinType,
 				fetched,
 				null,
-				aliasBaseGenerator,
-				sqlExpressionResolver,
-				fromClauseAccess,
-				creationContext
+				creationState
 		);
 
 		return new TableGroupJoin( navigablePath, joinType, tableGroup );
@@ -450,19 +503,12 @@ public class DiscriminatedAssociationAttributeMapping
 			NavigablePath navigablePath,
 			TableGroup lhs,
 			String explicitSourceAlias,
-			SqlAstJoinType requestedJoinType,
+			SqlAliasBase explicitSqlAliasBase,
+			SqlAstJoinType sqlAstJoinType,
 			boolean fetched,
 			Consumer<Predicate> predicateConsumer,
-			SqlAliasBaseGenerator aliasBaseGenerator,
-			SqlExpressionResolver sqlExpressionResolver,
-			FromClauseAccess fromClauseAccess,
-			SqlAstCreationContext creationContext) {
-		return new StandardVirtualTableGroup(
-				navigablePath,
-				this,
-				lhs,
-				fetched
-		);
+			SqlAstCreationState creationState) {
+		return new StandardVirtualTableGroup( navigablePath, this, lhs, fetched );
 	}
 
 	@Override
@@ -473,5 +519,10 @@ public class DiscriminatedAssociationAttributeMapping
 	@Override
 	public String getSqlAliasStem() {
 		return getAttributeName();
+	}
+
+	@Override
+	public void applyDiscriminator(Consumer<Predicate> predicateConsumer, String alias, TableGroup tableGroup, SqlAstCreationState creationState) {
+		throw new UnsupportedOperationException();
 	}
 }

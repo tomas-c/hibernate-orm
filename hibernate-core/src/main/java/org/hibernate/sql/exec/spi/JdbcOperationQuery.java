@@ -6,11 +6,13 @@
  */
 package org.hibernate.sql.exec.spi;
 
+import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
 
 import org.hibernate.internal.FilterJdbcParameter;
-import org.hibernate.internal.util.collections.CollectionHelper;
 import org.hibernate.query.spi.QueryOptions;
+import org.hibernate.sql.ast.tree.expression.JdbcParameter;
 
 /**
  * Unifying contract for any SQL statement we want to execute via JDBC.
@@ -28,8 +30,13 @@ public interface JdbcOperationQuery extends JdbcOperation {
 	 * Any parameters to apply for filters
 	 *
 	 * @see org.hibernate.annotations.Filter
+	 *
+	 * @deprecated No longer used.
 	 */
-	Set<FilterJdbcParameter> getFilterJdbcParameters();
+	@Deprecated(since = "6.2")
+	default Set<FilterJdbcParameter> getFilterJdbcParameters() {
+		return Collections.emptySet();
+	}
 
 	/**
 	 * Signals that the SQL depends on the parameter bindings e.g. due to the need for inlining
@@ -37,13 +44,10 @@ public interface JdbcOperationQuery extends JdbcOperation {
 	 */
 	boolean dependsOnParameterBindings();
 
-	boolean isCompatibleWith(JdbcParameterBindings jdbcParameterBindings, QueryOptions queryOptions);
+	/**
+	 * The parameters which were inlined into the query as literals.
+	 */
+	Map<JdbcParameter, JdbcParameterBinding> getAppliedParameters();
 
-	default void bindFilterJdbcParameters(JdbcParameterBindings jdbcParameterBindings) {
-		if ( CollectionHelper.isNotEmpty( getFilterJdbcParameters() ) ) {
-			for ( FilterJdbcParameter filterJdbcParameter : getFilterJdbcParameters() ) {
-				jdbcParameterBindings.addBinding( filterJdbcParameter.getParameter(), filterJdbcParameter.getBinding() );
-			}
-		}
-	}
+	boolean isCompatibleWith(JdbcParameterBindings jdbcParameterBindings, QueryOptions queryOptions);
 }

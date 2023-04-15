@@ -48,25 +48,25 @@ import static org.hibernate.sql.model.ModelMutationLogging.MODEL_MUTATION_LOGGER
  *
  * @author Steve Ebersole
  */
-public class MutationExecutorPostInsert implements MutationExecutor {
-	private final EntityMutationTarget mutationTarget;
-	private final MutationOperationGroup mutationOperationGroup;
+public class MutationExecutorPostInsert implements MutationExecutor, JdbcValueBindingsImpl.JdbcValueDescriptorAccess {
+	protected final EntityMutationTarget mutationTarget;
+	protected final MutationOperationGroup mutationOperationGroup;
 
-	private final PreparedStatementDetails identityInsertStatementDetails;
+	protected final PreparedStatementDetails identityInsertStatementDetails;
 
 	/**
 	 * Any non-batched JDBC statements
 	 */
-	private final PreparedStatementGroup secondaryTablesStatementGroup;
+	protected final PreparedStatementGroup secondaryTablesStatementGroup;
 
-	private final JdbcValueBindingsImpl valueBindings;
+	protected final JdbcValueBindingsImpl valueBindings;
 
 	public MutationExecutorPostInsert(MutationOperationGroup mutationOperationGroup, SharedSessionContractImplementor session) {
 		this.mutationTarget = (EntityMutationTarget) mutationOperationGroup.getMutationTarget();
 		this.valueBindings = new JdbcValueBindingsImpl(
 				MutationType.INSERT,
 				mutationTarget,
-				this::findJdbcValueDescriptor,
+				this,
 				session
 		);
 		this.mutationOperationGroup = mutationOperationGroup;
@@ -112,7 +112,8 @@ public class MutationExecutorPostInsert implements MutationExecutor {
 		return valueBindings;
 	}
 
-	private JdbcValueDescriptor findJdbcValueDescriptor(String tableName, String columnName, ParameterUsage usage) {
+	@Override
+	public JdbcValueDescriptor resolveValueDescriptor(String tableName, String columnName, ParameterUsage usage) {
 		final MutationOperation operation = mutationOperationGroup.getOperation( tableName );
 		if ( operation == null ) {
 			return null;

@@ -9,6 +9,7 @@ package org.hibernate.sql.results.graph.entity;
 import java.util.Collection;
 import java.util.function.Consumer;
 
+import org.hibernate.Hibernate;
 import org.hibernate.HibernateException;
 import org.hibernate.LockMode;
 import org.hibernate.StaleObjectStateException;
@@ -33,7 +34,7 @@ import org.hibernate.loader.ast.internal.CacheEntityLoaderHelper;
 import org.hibernate.metamodel.mapping.AttributeMapping;
 import org.hibernate.metamodel.mapping.AttributeMetadata;
 import org.hibernate.metamodel.mapping.EntityDiscriminatorMapping;
-import org.hibernate.metamodel.mapping.EntityDiscriminatorMapping.DiscriminatorValueDetails;
+import org.hibernate.metamodel.mapping.DiscriminatorValueDetails;
 import org.hibernate.metamodel.mapping.EntityMappingType;
 import org.hibernate.metamodel.mapping.EntityValuedModelPart;
 import org.hibernate.metamodel.mapping.EntityVersionMapping;
@@ -41,7 +42,6 @@ import org.hibernate.metamodel.mapping.ManagedMappingType;
 import org.hibernate.metamodel.mapping.ModelPart;
 import org.hibernate.persister.entity.EntityPersister;
 import org.hibernate.property.access.internal.PropertyAccessStrategyBackRefImpl;
-import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.proxy.LazyInitializer;
 import org.hibernate.proxy.map.MapProxy;
 import org.hibernate.spi.NavigablePath;
@@ -52,7 +52,6 @@ import org.hibernate.sql.results.graph.DomainResultAssembler;
 import org.hibernate.sql.results.graph.Fetch;
 import org.hibernate.sql.results.graph.Initializer;
 import org.hibernate.sql.results.graph.basic.BasicResultAssembler;
-import org.hibernate.sql.results.graph.entity.internal.EntityResultInitializer;
 import org.hibernate.sql.results.internal.NullValueAssembler;
 import org.hibernate.sql.results.jdbc.spi.JdbcValuesSourceProcessingOptions;
 import org.hibernate.sql.results.jdbc.spi.JdbcValuesSourceProcessingState;
@@ -96,9 +95,10 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 	// per-row state
 	private EntityPersister concreteDescriptor;
 	private EntityKey entityKey;
+	private Object version;
 	private Object entityInstance;
 	private Object entityInstanceForNotify;
-	private boolean missing;
+	protected boolean missing;
 	boolean isInitialized;
 	private boolean isOwningInitializer;
 	private Object[] resolvedEntityState;
@@ -212,8 +212,16 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		return navigablePath;
 	}
 
+	protected DomainResultAssembler<?> getIdentifierAssembler() {
+		return identifierAssembler;
+	}
+
 	protected boolean isMissing() {
 		return missing;
+	}
+
+	protected void setMissing(boolean missing) {
+		this.missing = missing;
 	}
 
 	protected abstract boolean isEntityReturn();
@@ -399,26 +407,44 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private boolean shouldSkipResolveInstance(RowProcessingState rowProcessingState) {
-		final NavigablePath parent = navigablePath.getParent();
-		if ( parent != null ) {
-			final Initializer parentInitializer = rowProcessingState.resolveInitializer( parent );
-			if ( parentInitializer != null && parentInitializer.isEntityInitializer() ) {
-				if ( isReferencedModelPartAssignableToConcreteParent( parentInitializer ) ) {
-					return true;
+	protected boolean shouldSkipResolveInstance(RowProcessingState rowProcessingState) {
+		if ( navigablePath.getParent() != null ) {
+			Initializer parentInitializer = rowProcessingState.resolveInitializer( navigablePath.getParent() );
+			if ( parentInitializer != null ) {
+				ModelPart modelPart = referencedModelPart;
+				NavigablePath currentNavigablePath = navigablePath;
+				// Walk back initializers until we find an EntityInitializer
+				while ( parentInitializer != null && !parentInitializer.isEntityInitializer() ) {
+					modelPart = parentInitializer.getInitializedPart();
+					currentNavigablePath = currentNavigablePath.getParent();
+					parentInitializer = rowProcessingState.resolveInitializer( currentNavigablePath.getParent() );
+				}
+				if ( parentInitializer != null && parentInitializer.asEntityInitializer()
+						.getEntityDescriptor()
+						.getEntityMetamodel()
+						.isPolymorphic() ) {
+					parentInitializer.resolveKey( rowProcessingState );
+					return isReferencedModelPartInConcreteParent(
+							modelPart,
+							currentNavigablePath,
+							parentInitializer
+					);
 				}
 			}
 		}
 		return false;
 	}
 
-	private boolean isReferencedModelPartAssignableToConcreteParent(Initializer parentInitializer) {
+	private boolean isReferencedModelPartInConcreteParent(
+			ModelPart modelPart,
+			NavigablePath partNavigablePath,
+			Initializer parentInitializer) {
 		final EntityPersister parentConcreteDescriptor = parentInitializer.asEntityInitializer()
 				.getConcreteDescriptor();
-		if ( parentConcreteDescriptor != null && parentConcreteDescriptor.getEntityMetamodel().isPolymorphic()) {
-			final ModelPart concreteModelPart = parentConcreteDescriptor.findByPath( navigablePath.getLocalName() );
+		if ( parentConcreteDescriptor != null && parentConcreteDescriptor.getEntityMetamodel().isPolymorphic() ) {
+			final ModelPart concreteModelPart = parentConcreteDescriptor.findByPath( partNavigablePath.getLocalName() );
 			if ( concreteModelPart == null
-					|| !referencedModelPart.getJavaType().getJavaTypeClass()
+					|| !modelPart.getJavaType().getJavaTypeClass()
 					.isAssignableFrom( concreteModelPart.getJavaType().getJavaTypeClass() ) ) {
 		/*
 			Given:
@@ -455,7 +481,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		return false;
 	}
 
-	private void resolveEntityInstance(
+	protected void resolveEntityInstance(
 			RowProcessingState rowProcessingState,
 			LoadingEntityEntry existingLoadingEntry,
 			Object entityIdentifier) {
@@ -471,10 +497,9 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 
 		final PersistenceContext persistenceContext = rowProcessingState.getSession().getPersistenceContextInternal();
 		final Object proxy = getProxy( persistenceContext );
-		final Object entityInstanceFromExecutionContext =
-				rowProcessingState.getJdbcValuesSourceProcessingState().getExecutionContext().getEntityInstance();
+		final Object entityInstanceFromExecutionContext = getEntityInstanceFromExecutionContext( rowProcessingState );
 		if ( isProxyInstance( proxy ) ) {
-			if ( useEntityInstanceFromExecutionContext( entityInstanceFromExecutionContext, persistenceContext.getSession() ) ) {
+			if ( entityInstanceFromExecutionContext != null ) {
 				entityInstance = entityInstanceFromExecutionContext;
 				registerLoadingEntity( rowProcessingState, entityInstance );
 			}
@@ -491,7 +516,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 					this.isInitialized = true;
 				}
 			}
-			else if ( useEntityInstanceFromExecutionContext( entityInstanceFromExecutionContext, persistenceContext.getSession() ) ) {
+			else if ( entityInstanceFromExecutionContext != null ) {
 				entityInstance = entityInstanceFromExecutionContext;
 				registerLoadingEntity( rowProcessingState, entityInstance );
 			}
@@ -505,13 +530,8 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private boolean useEntityInstanceFromExecutionContext(
-			Object entityInstanceFromExecutionContext,
-			SharedSessionContractImplementor session) {
-		return this instanceof EntityResultInitializer
-			&& entityInstanceFromExecutionContext != null
-			&& entityKey.getIdentifier()
-				.equals( entityDescriptor.getIdentifier( entityInstanceFromExecutionContext, session ) );
+	protected Object getEntityInstanceFromExecutionContext(RowProcessingState rowProcessingState) {
+		return null;
 	}
 
 	private void upgradeLockMode(RowProcessingState rowProcessingState) {
@@ -536,18 +556,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 	}
 
 	private boolean isExistingEntityInitialized(Object existingEntity) {
-		final LazyInitializer lazyInitializer = HibernateProxy.extractLazyInitializer( entityInstance );
-		if ( lazyInitializer != null ) {
-			return !lazyInitializer.isUninitialized();
-		}
-		else if ( isPersistentAttributeInterceptable( existingEntity ) ) {
-			final PersistentAttributeInterceptor persistentAttributeInterceptor =
-					asPersistentAttributeInterceptable( entityInstance ).$$_hibernate_getInterceptor();
-			return persistentAttributeInterceptor != null
-				&& !( persistentAttributeInterceptor instanceof EnhancementAsProxyLazinessInterceptor );
-		}
-
-		return true;
+		return Hibernate.isInitialized( existingEntity );
 	}
 
 	/**
@@ -593,6 +602,10 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
+	protected boolean isOwningInitializer() {
+		return isOwningInitializer;
+	}
+
 	private Object resolveInstance(
 			Object entityIdentifier,
 			LoadingEntityEntry existingLoadingEntry,
@@ -615,7 +628,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private Object resolveEntityInstance(Object entityIdentifier, RowProcessingState rowProcessingState) {
+	protected Object resolveEntityInstance(Object entityIdentifier, RowProcessingState rowProcessingState) {
 		final Object resolved = resolveToOptionalInstance( rowProcessingState );
 		if ( resolved != null ) {
 			registerLoadingEntity( rowProcessingState, resolved );
@@ -638,14 +651,14 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private Object instantiateEntity(Object entityIdentifier, SharedSessionContractImplementor session) {
-		final Object instance = session.instantiate( concreteDescriptor.getEntityName(), entityKey.getIdentifier() );
+	protected Object instantiateEntity(Object entityIdentifier, SharedSessionContractImplementor session) {
+		final Object instance = session.instantiate( concreteDescriptor, entityKey.getIdentifier() );
 		if ( EntityLoadingLogging.DEBUG_ENABLED ) {
 			EntityLoadingLogging.ENTITY_LOADING_LOGGER.debugf(
 					"(%s) Created new entity instance [%s] : %s",
 					getSimpleConcreteImplName(),
-					toLoggableString( getNavigablePath(), entityIdentifier),
-					instance
+					toLoggableString( getNavigablePath(), entityIdentifier ),
+					System.identityHashCode( instance )
 			);
 		}
 		return instance;
@@ -692,12 +705,10 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 	@Override
 	public void initializeInstance(RowProcessingState rowProcessingState) {
 		if ( !missing && !isInitialized ) {
-			preLoad( rowProcessingState );
-
 			final LazyInitializer lazyInitializer = extractLazyInitializer( entityInstance );
+			final SharedSessionContractImplementor session = rowProcessingState.getSession();
+			final PersistenceContext persistenceContext = session.getPersistenceContextInternal();
 			if ( lazyInitializer != null ) {
-				final SharedSessionContractImplementor session = rowProcessingState.getSession();
-				final PersistenceContext persistenceContext = session.getPersistenceContextInternal();
 				Object instance = persistenceContext.getEntity( entityKey );
 				if ( instance == null ) {
 					instance = resolveInstance(
@@ -711,8 +722,42 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 				entityInstanceForNotify = instance;
 			}
 			else {
-				initializeEntity( entityInstance, rowProcessingState );
-				entityInstanceForNotify = entityInstance;
+				if ( entityDescriptor.canReadFromCache() ) {
+					/*
+						@Cache
+						class Child {
+
+							@ManyToOne
+							private Parent parent;
+						}
+
+						@Cache
+						class Parent {
+							@OneToOne
+							private Parent parent;
+
+						}
+
+						when the query "select c from Child c" is executed and the second level cache (2LC) contains
+						an instance of Child and Parent
+						then when the EntitySelectFetchInitializer#initializeInstance() is executed before the EntityResultInitializer one
+						the persistence context will contain the instances retrieved form the 2LC
+					 */
+					final Object entity = persistenceContext.getEntity( entityKey );
+					if ( entity != null ) {
+						entityInstance = entity;
+						registerLoadingEntity( rowProcessingState, entityInstance );
+						initializeEntityInstance( entityInstance, rowProcessingState );
+					}
+					else {
+						initializeEntity( entityInstance, rowProcessingState );
+					}
+					entityInstanceForNotify = entityInstance;
+				}
+				else {
+					initializeEntity( entityInstance, rowProcessingState );
+					entityInstanceForNotify = entityInstance;
+				}
 			}
 
 			notifyResolutionListeners( entityInstanceForNotify );
@@ -728,7 +773,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private boolean consistentInstance(Object toInitialize, RowProcessingState rowProcessingState) {
+	protected boolean consistentInstance(Object toInitialize, RowProcessingState rowProcessingState) {
 		final PersistenceContext persistenceContextInternal =
 				rowProcessingState.getSession().getPersistenceContextInternal();
 		// Only call PersistenceContext#getEntity within the assert expression, as it is costly
@@ -749,9 +794,9 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 			);
 		}
 
-		entityDescriptor.setIdentifier( toInitialize, entityIdentifier, session );
-
 		resolvedEntityState = extractConcreteTypeStateValues( rowProcessingState );
+
+		preLoad( rowProcessingState );
 
 		if ( isPersistentAttributeInterceptable(toInitialize) ) {
 			PersistentAttributeInterceptor persistentAttributeInterceptor =
@@ -771,7 +816,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		// Also register possible unique key entries
 		registerPossibleUniqueKeyEntries( toInitialize, session );
 
-		final Object version = versionAssembler != null ? versionAssembler.assemble( rowProcessingState ) : null;
+		version = versionAssembler != null ? versionAssembler.assemble( rowProcessingState ) : null;
 		final Object rowId = rowIdAssembler != null ? rowIdAssembler.assemble( rowProcessingState ) : null;
 
 		// from the perspective of Hibernate, an entity is read locked as soon as it is read
@@ -791,8 +836,6 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 				false
 		);
 
-		updateCaches( toInitialize, rowProcessingState, session, persistenceContext, entityIdentifier, version );
-
 		registerNaturalIdResolution( persistenceContext, entityIdentifier );
 
 		takeSnapshot( rowProcessingState, session, persistenceContext, entityEntry );
@@ -807,6 +850,8 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 			);
 		}
 
+		assert concreteDescriptor.getIdentifier( toInitialize, session ) != null;
+
 		final StatisticsImplementor statistics = session.getFactory().getStatistics();
 		if ( statistics.isStatisticsEnabled() ) {
 			if ( !rowProcessingState.isQueryCacheHit() ) {
@@ -815,7 +860,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private void updateCaches(
+	protected void updateCaches(
 			Object toInitialize,
 			RowProcessingState rowProcessingState,
 			SharedSessionContractImplementor session,
@@ -829,7 +874,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private void registerNaturalIdResolution(PersistenceContext persistenceContext, Object entityIdentifier) {
+	protected void registerNaturalIdResolution(PersistenceContext persistenceContext, Object entityIdentifier) {
 		if ( entityDescriptor.getNaturalIdMapping() != null ) {
 			final Object naturalId =
 					entityDescriptor.getNaturalIdMapping().extractNaturalIdFromEntityState( resolvedEntityState );
@@ -838,7 +883,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private void takeSnapshot(
+	protected void takeSnapshot(
 			RowProcessingState rowProcessingState,
 			SharedSessionContractImplementor session,
 			PersistenceContext persistenceContext,
@@ -938,7 +983,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private void registerPossibleUniqueKeyEntries(Object toInitialize, SharedSessionContractImplementor session) {
+	protected void registerPossibleUniqueKeyEntries(Object toInitialize, SharedSessionContractImplementor session) {
 		for ( Type propertyType : concreteDescriptor.getPropertyTypes() ) {
 			if ( propertyType instanceof AssociationType ) {
 				final AssociationType associationType = (AssociationType) propertyType;
@@ -968,7 +1013,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		}
 	}
 
-	private Object[] extractConcreteTypeStateValues(RowProcessingState rowProcessingState) {
+	protected Object[] extractConcreteTypeStateValues(RowProcessingState rowProcessingState) {
 		final Object[] values = new Object[concreteDescriptor.getNumberOfAttributeMappings()];
 		final DomainResultAssembler<?>[] concreteAssemblers = assemblers[concreteDescriptor.getSubclassId()];
 		for ( int i = 0; i < values.length; i++ ) {
@@ -978,7 +1023,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		return values;
 	}
 
-	private boolean skipInitialization(Object toInitialize, RowProcessingState rowProcessingState) {
+	protected boolean skipInitialization(Object toInitialize, RowProcessingState rowProcessingState) {
 		final EntityEntry entry =
 				rowProcessingState.getSession().getPersistenceContextInternal().getEntry( toInitialize );
 		if ( entry == null ) {
@@ -1022,7 +1067,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		return readOnly == null ? persistenceContext.isDefaultReadOnly() : readOnly;
 	}
 
-	private void preLoad(RowProcessingState rowProcessingState) {
+	protected void preLoad(RowProcessingState rowProcessingState) {
 		final SharedSessionContractImplementor session = rowProcessingState.getSession();
 		if ( session.isEventSource() ) {
 			final PreLoadEvent preLoadEvent = rowProcessingState.getJdbcValuesSourceProcessingState().getPreLoadEvent();
@@ -1031,6 +1076,7 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 			preLoadEvent.reset();
 
 			preLoadEvent.setEntity( entityInstance )
+					.setState( resolvedEntityState )
 					.setId( entityKey.getIdentifier() )
 					.setPersister( concreteDescriptor );
 
@@ -1046,17 +1092,66 @@ public abstract class AbstractEntityInitializer extends AbstractFetchParentAcces
 		return isInitialized;
 	}
 
+	protected void setEntityInitialized(boolean isInitialized) {
+		this.isInitialized = isInitialized;
+	}
+
+	protected void setEntityInstanceForNotify(Object entityInstanceForNotify) {
+		this.entityInstanceForNotify = entityInstanceForNotify;
+	}
+
+	protected Object getEntityInstanceForNotify() {
+		return entityInstanceForNotify;
+	}
+
+	protected void setResolvedEntityState(Object[] resolvedEntityState) {
+		this.resolvedEntityState = resolvedEntityState;
+	}
+
+	protected Object[] getResolvedEntityState() {
+		return resolvedEntityState;
+	}
+
 	@Override
 	public EntityPersister getConcreteDescriptor() {
 		return concreteDescriptor == null ? entityDescriptor : concreteDescriptor;
 	}
 
+	protected DomainResultAssembler<?> getVersionAssembler() {
+		return versionAssembler;
+	}
+
+	protected DomainResultAssembler<Object> getRowIdAssembler() {
+		return rowIdAssembler;
+	}
+
+	protected LockMode getLockMode() {
+		return lockMode;
+	}
+
+	protected DomainResultAssembler<?>[][] getAssemblers() {
+		return assemblers;
+	}
+
 	@Override
 	public void finishUpRow(RowProcessingState rowProcessingState) {
+		final SharedSessionContractImplementor session = rowProcessingState.getSession();
+		if ( resolvedEntityState != null ) {
+			updateCaches(
+					entityInstanceForNotify,
+					rowProcessingState,
+					session,
+					session.getPersistenceContext(),
+					entityKey.getIdentifier(),
+					version
+			);
+		}
+
 		// reset row state
 		isOwningInitializer = false;
 		concreteDescriptor = null;
 		entityKey = null;
+		version = null;
 		entityInstance = null;
 		entityInstanceForNotify = null;
 		missing = false;

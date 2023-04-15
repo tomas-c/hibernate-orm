@@ -49,7 +49,10 @@ import org.jboss.logging.Logger;
  * @author Emmanuel Bernard
  * @author Hardy Ferentschik
  * @author Steve Ebersole
+ *
+ * @deprecated Use {@link ConvertedBasicType} instead
  */
+@Deprecated(since="6.2", forRemoval=true)
 public class EnumType<T extends Enum<T>>
 		implements EnhancedUserType<T>, DynamicParameterizedType, LoggableUserType, TypeConfigurationAware, Serializable {
 	private static final Logger LOG = CoreLogging.logger( EnumType.class );
@@ -196,7 +199,7 @@ public class EnumType<T extends Enum<T>>
 		}
 	}
 
-	private JavaType<?> resolveRelationalJavaType(
+	private JavaType<? extends Number> resolveRelationalJavaType(
 			LocalJdbcTypeIndicators indicators,
 			EnumJavaType<?> enumJavaType) {
 		return enumJavaType.getRecommendedJdbcType( indicators )
@@ -261,17 +264,13 @@ public class EnumType<T extends Enum<T>>
 			final int type = Integer.decode( (String) parameters.get( TYPE ) );
 			return getConverterForType( enumJavaType, localIndicators, type );
 		}
-
+		final JavaType<? extends Number> relationalJavaType = resolveRelationalJavaType( localIndicators, enumJavaType );
 		// the fallback
 		return new OrdinalEnumValueConverter<>(
 				enumJavaType,
-				getIntegerType().getRecommendedJdbcType( localIndicators ),
-				getIntegerType()
+				relationalJavaType.getRecommendedJdbcType( localIndicators ),
+				relationalJavaType
 		);
-	}
-
-	private JavaType<Integer> getIntegerType() {
-		return typeConfiguration.getJavaTypeRegistry().getDescriptor(Integer.class);
 	}
 
 	private JavaType<String> getStringType() {
@@ -290,10 +289,11 @@ public class EnumType<T extends Enum<T>>
 			);
 		}
 		else {
+			final JavaType<? extends Number> relationalJavaType = resolveRelationalJavaType( localIndicators, enumJavaType );
 			return new OrdinalEnumValueConverter<>(
 					enumJavaType,
-					getIntegerType().getRecommendedJdbcType( localIndicators ),
-					getIntegerType()
+					relationalJavaType.getRecommendedJdbcType( localIndicators ),
+					relationalJavaType
 			);
 		}
 	}
@@ -303,10 +303,11 @@ public class EnumType<T extends Enum<T>>
 			LocalJdbcTypeIndicators localIndicators,
 			int type) {
 		if ( isNumericType(type) ) {
+			final JavaType<? extends Number> relationalJavaType = resolveRelationalJavaType( localIndicators, enumJavaType );
 			return new OrdinalEnumValueConverter<>(
 					enumJavaType,
-					getIntegerType().getRecommendedJdbcType( localIndicators ),
-					getIntegerType()
+					relationalJavaType.getRecommendedJdbcType( localIndicators ),
+					relationalJavaType
 			);
 		}
 		else if ( isCharacterType(type) ) {

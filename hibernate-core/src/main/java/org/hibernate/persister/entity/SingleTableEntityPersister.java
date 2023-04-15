@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.hibernate.HibernateException;
+import org.hibernate.Internal;
 import org.hibernate.MappingException;
 import org.hibernate.Remove;
 import org.hibernate.cache.spi.access.EntityDataAccess;
@@ -68,6 +69,7 @@ import static org.hibernate.sql.model.ast.builder.TableMutationBuilder.NULL;
  *
  * @author Gavin King
  */
+@Internal
 public class SingleTableEntityPersister extends AbstractEntityPersister {
 
 	// the class hierarchy structure
@@ -111,7 +113,6 @@ public class SingleTableEntityPersister extends AbstractEntityPersister {
 	private final String discriminatorColumnReaders;
 	private final String discriminatorColumnReaderTemplate;
 	private final String discriminatorFormulaTemplate;
-	private final String discriminatorAlias;
 	private final BasicType<?> discriminatorType;
 	private final Object discriminatorValue;
 	private final String discriminatorSQLValue;
@@ -119,11 +120,6 @@ public class SingleTableEntityPersister extends AbstractEntityPersister {
 
 	private final String[] constraintOrderedTableNames;
 	private final String[][] constraintOrderedKeyColumnNames;
-
-	//private final Map propertyTableNumbersByName = new HashMap();
-//	private final Map<String, Integer> propertyTableNumbersByNameAndSubclass;
-
-	//INITIALIZATION:
 
 	@Deprecated(since = "6.0")
 	public SingleTableEntityPersister(
@@ -319,7 +315,6 @@ public class SingleTableEntityPersister extends AbstractEntityPersister {
 			discriminatorInsertable = isDiscriminatorInsertable( persistentClass );
 			if ( discriminator.hasFormula() ) {
 				final Formula formula = (Formula) selectable;
-//				discriminatorFormula = formula.getFormula();
 				discriminatorFormulaTemplate = formula.getTemplate( dialect, typeConfiguration, functionRegistry );
 				discriminatorColumnName = null;
 				discriminatorColumnReaders = null;
@@ -332,7 +327,6 @@ public class SingleTableEntityPersister extends AbstractEntityPersister {
 				discriminatorColumnReaders = column.getReadExpr( dialect );
 				discriminatorColumnReaderTemplate = column.getTemplate( dialect, typeConfiguration, functionRegistry );
 				discriminatorAlias = column.getAlias( dialect, persistentClass.getRootTable() );
-//				discriminatorFormula = null;
 				discriminatorFormulaTemplate = null;
 			}
 		}
@@ -448,11 +442,6 @@ public class SingleTableEntityPersister extends AbstractEntityPersister {
 	@Override
 	public String getDiscriminatorColumnReaderTemplate() {
 		return discriminatorColumnReaderTemplate;
-	}
-
-	@Override
-	public String getDiscriminatorAlias() {
-		return discriminatorAlias;
 	}
 
 	@Override
@@ -745,5 +734,18 @@ public class SingleTableEntityPersister extends AbstractEntityPersister {
 					)
 			);
 		}
+	}
+
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// Deprecations
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+	@Deprecated private final String discriminatorAlias;
+
+	@Override
+	public String getDiscriminatorAlias() {
+		return discriminatorAlias;
 	}
 }

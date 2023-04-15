@@ -222,6 +222,12 @@ public interface DeprecationLogger extends BasicLogger {
 //	void deprecatedComponentMapping(String name);
 
 	@LogMessage(level = WARN)
+	@Message(value = "%s does not need to be specified explicitly using 'hibernate.dialect' "
+			+ "(remove the property setting and it will be selected by default)",
+			id = 90000025)
+	void automaticDialect(String dialect);
+
+	@LogMessage(level = WARN)
 	@Message(value = "%s has been deprecated",
 			id = 90000026)
 	void deprecatedDialect(String dialect);
@@ -265,5 +271,16 @@ public interface DeprecationLogger extends BasicLogger {
 			value = "The [%s] configuration is deprecated and will be removed. Set the value to [%s] to get rid of this warning"
 	)
 	void deprecatedSettingForRemoval(String settingName, String defaultValue);
+
+	/**
+	 * Different from {@link #deprecatedSetting} in that sometimes there is no
+	 * direct alternative
+	 */
+	@LogMessage(level = WARN)
+	@Message(
+			id = 90000030,
+			value = "The [%s] configuration is deprecated and will be removed."
+	)
+	void deprecatedSettingNoReplacement(String settingName);
 
 }

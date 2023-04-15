@@ -6,6 +6,7 @@
  */
 package org.hibernate.metamodel.mapping.internal;
 
+import java.io.Serializable;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.BiConsumer;
@@ -324,27 +325,37 @@ public class BasicValuedCollectionPart
 	}
 
 	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		valueConsumer.consume( disassemble( domainValue, session ), this );
-	}
-
-	@Override
-	public void decompose(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		valueConsumer.consume( disassemble( domainValue, session ), this );
-	}
-
-	@Override
-	public int forEachDisassembledJdbcValue(
-			Object value,
+	public <X, Y> int breakDownJdbcValues(
+			Object domainValue,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
 			SharedSessionContractImplementor session) {
-		valuesConsumer.consume( offset, value, getJdbcMapping() );
+		valueConsumer.consume( offset, x, y, disassemble( domainValue, session ), this );
 		return getJdbcTypeCount();
 	}
 
 	@Override
-	public Object disassemble(Object value, SharedSessionContractImplementor session) {
-		return selectableMapping.getJdbcMapping().convertToRelationalValue( value );
+	public <X, Y> int decompose(
+			Object domainValue, int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		valueConsumer.consume( offset, x, y, disassemble( domainValue, session ), this );
+		return getJdbcTypeCount();
+	}
+
+	@Override
+	public <X, Y> int forEachDisassembledJdbcValue(
+			Object value,
+			int offset,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
+			SharedSessionContractImplementor session) {
+		valuesConsumer.consume( offset, x, y, value, getJdbcMapping() );
+		return getJdbcTypeCount();
 	}
 }

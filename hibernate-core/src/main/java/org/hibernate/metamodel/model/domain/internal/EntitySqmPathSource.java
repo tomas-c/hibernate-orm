@@ -21,11 +21,16 @@ import org.hibernate.query.sqm.tree.from.SqmFrom;
  * @author Steve Ebersole
  */
 public class EntitySqmPathSource<J> extends AbstractSqmPathSource<J> implements SqmJoinable<Object, J> {
+	private final boolean isGeneric;
+
 	public EntitySqmPathSource(
 			String localPathName,
+			SqmPathSource<J> pathModel,
 			EntityDomainType<J> domainType,
-			BindableType jpaBindableType) {
-		super( localPathName, domainType, jpaBindableType );
+			BindableType jpaBindableType,
+			boolean isGeneric) {
+		super( localPathName, pathModel, domainType, jpaBindableType );
+		this.isGeneric = isGeneric;
 	}
 
 	@Override
@@ -41,6 +46,11 @@ public class EntitySqmPathSource<J> extends AbstractSqmPathSource<J> implements 
 	}
 
 	@Override
+	public boolean isGeneric() {
+		return isGeneric;
+	}
+
+	@Override
 	public SqmPath<J> createSqmPath(SqmPath<?> lhs, SqmPathSource<?> intermediatePathSource) {
 		final NavigablePath navigablePath;
 		if ( intermediatePathSource == null ) {
@@ -51,7 +61,7 @@ public class EntitySqmPathSource<J> extends AbstractSqmPathSource<J> implements 
 		}
 		return new SqmEntityValuedSimplePath<>(
 				navigablePath,
-				this,
+				pathModel,
 				lhs,
 				lhs.nodeBuilder()
 		);
@@ -66,7 +76,7 @@ public class EntitySqmPathSource<J> extends AbstractSqmPathSource<J> implements 
 			SqmCreationState creationState) {
 		return new SqmPluralPartJoin<>(
 				lhs,
-				this,
+				pathModel,
 				alias,
 				joinType,
 				creationState.getCreationContext().getNodeBuilder()

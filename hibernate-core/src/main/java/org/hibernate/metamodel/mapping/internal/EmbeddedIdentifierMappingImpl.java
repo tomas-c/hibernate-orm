@@ -109,17 +109,6 @@ public class EmbeddedIdentifierMappingImpl
 		return name;
 	}
 
-
-	@Override
-	public int getNumberOfFetchables() {
-		return getEmbeddableTypeDescriptor().getNumberOfAttributeMappings();
-	}
-
-	@Override
-	public Fetchable getFetchable(int position) {
-		return getEmbeddableTypeDescriptor().getFetchable( position );
-	}
-
 	@Override
 	public PropertyAccess getPropertyAccess() {
 		return propertyAccess;
@@ -130,35 +119,4 @@ public class EmbeddedIdentifierMappingImpl
 		return name;
 	}
 
-	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		getEmbeddableTypeDescriptor().breakDownJdbcValues( domainValue, valueConsumer, session );
-	}
-
-	@Override
-	public int forEachDisassembledJdbcValue(
-			Object value,
-			int offset,
-			JdbcValuesConsumer valuesConsumer,
-			SharedSessionContractImplementor session) {
-		return getEmbeddableTypeDescriptor().forEachDisassembledJdbcValue(
-				value,
-				offset,
-				valuesConsumer,
-				session
-		);
-	}
-
-	@Override
-	public Object disassemble(Object value, SharedSessionContractImplementor session) {
-		final EmbeddableMappingType embeddableTypeDescriptor = getEmbeddableTypeDescriptor();
-		final Object[] result = new Object[embeddableTypeDescriptor.getNumberOfAttributeMappings()];
-		embeddableTypeDescriptor.forEachAttributeMapping(
-				(i, mapping) -> {
-					Object o = mapping.getPropertyAccess().getGetter().get( value );
-					result[i] = mapping.disassemble( o, session );
-				}
-		);
-		return result;
-	}
 }

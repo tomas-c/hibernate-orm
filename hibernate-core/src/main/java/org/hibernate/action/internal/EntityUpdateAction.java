@@ -7,6 +7,7 @@
 package org.hibernate.action.internal;
 
 import org.hibernate.AssertionFailure;
+import org.hibernate.CacheMode;
 import org.hibernate.HibernateException;
 import org.hibernate.cache.CacheException;
 import org.hibernate.cache.spi.access.EntityDataAccess;
@@ -168,6 +169,7 @@ public class EntityUpdateAction extends EntityAction {
 				throw new AssertionFailure( "possible non thread safe access to session" );
 			}
 			handleGeneratedProperties( entry );
+			handleDeleted( entry );
 			updateCacheItem( previousVersion, ck, entry );
 			handleNaturalIdResolutions( persister, session, id );
 			postUpdate();
@@ -179,7 +181,7 @@ public class EntityUpdateAction extends EntityAction {
 		}
 	}
 
-	private void handleNaturalIdResolutions(EntityPersister persister, SharedSessionContractImplementor session, Object id) {
+	protected void handleNaturalIdResolutions(EntityPersister persister, SharedSessionContractImplementor session, Object id) {
 		if ( naturalIdMapping != null ) {
 			session.getPersistenceContextInternal().getNaturalIdResolutions().manageSharedResolution(
 					id,
@@ -191,11 +193,11 @@ public class EntityUpdateAction extends EntityAction {
 		}
 	}
 
-	private void updateCacheItem(Object previousVersion, Object ck, EntityEntry entry) {
+	protected void updateCacheItem(Object previousVersion, Object ck, EntityEntry entry) {
 		final EntityPersister persister = getPersister();
 		if ( persister.canWriteToCache() ) {
 			final SharedSessionContractImplementor session = getSession();
-			if ( persister.isCacheInvalidationRequired() || entry.getStatus() != Status.MANAGED ) {
+			if ( isCacheInvalidationRequired( persister, session ) || entry.getStatus() != Status.MANAGED ) {
 				persister.getCacheAccessStrategy().remove( session, ck );
 			}
 			else if ( session.getCacheMode().isPutEnabled() ) {
@@ -215,12 +217,20 @@ public class EntityUpdateAction extends EntityAction {
 		}
 	}
 
+	private static boolean isCacheInvalidationRequired(
+			EntityPersister persister,
+			SharedSessionContractImplementor session) {
+		// the cache has to be invalidated when CacheMode is equal to GET or IGNORE
+		return persister.isCacheInvalidationRequired()
+			|| session.getCacheMode() == CacheMode.GET
+			|| session.getCacheMode() == CacheMode.IGNORE;
+	}
+
 	private void handleGeneratedProperties(EntityEntry entry) {
 		final EntityPersister persister = getPersister();
-		final Object instance = getInstance();
-
 		if ( entry.getStatus() == Status.MANAGED || persister.isVersionPropertyGenerated() ) {
 			final SharedSessionContractImplementor session = getSession();
+			final Object instance = getInstance();
 			final Object id = getId();
 			// get the updated snapshot of the entity state by cloning current state;
 			// it is safe to copy in place, since by this time no-one else (should have)
@@ -244,16 +254,18 @@ public class EntityUpdateAction extends EntityAction {
 			}
 			entry.postUpdate( instance, state, nextVersion );
 		}
+	}
 
+	private void handleDeleted(EntityEntry entry) {
 		if ( entry.getStatus() == Status.DELETED ) {
-			final EntityMetamodel entityMetamodel = persister.getEntityMetamodel();
+			final EntityMetamodel entityMetamodel = getPersister().getEntityMetamodel();
 			final boolean isImpliedOptimisticLocking = !entityMetamodel.isVersioned()
 					&& entityMetamodel.getOptimisticLockStyle().isAllOrDirty();
 			if ( isImpliedOptimisticLocking && entry.getLoadedState() != null ) {
 				// The entity will be deleted and because we are going to create a delete statement
 				// that uses all the state values in the where clause, the entry state needs to be
 				// updated otherwise the statement execution will not delete any row (see HHH-15218).
-				entry.postUpdate( instance, state, nextVersion );
+				entry.postUpdate( getInstance(), state, nextVersion );
 			}
 		}
 	}
@@ -271,7 +283,7 @@ public class EntityUpdateAction extends EntityAction {
 		}
 	}
 
-	private Object lockCacheItem(Object previousVersion) {
+	protected Object lockCacheItem(Object previousVersion) {
 		final EntityPersister persister = getPersister();
 		if ( persister.canWriteToCache() ) {
 			final SharedSessionContractImplementor session = getSession();

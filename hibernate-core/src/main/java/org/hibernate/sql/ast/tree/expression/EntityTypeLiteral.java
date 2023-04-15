@@ -8,11 +8,12 @@ package org.hibernate.sql.ast.tree.expression;
 
 import java.util.List;
 
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.util.IndexedConsumer;
 import org.hibernate.metamodel.mapping.JdbcMapping;
 import org.hibernate.metamodel.mapping.MappingModelExpressible;
-import org.hibernate.persister.entity.DiscriminatorType;
+import org.hibernate.metamodel.mapping.DiscriminatorType;
 import org.hibernate.persister.entity.EntityPersister;
 import org.hibernate.persister.entity.Queryable;
 import org.hibernate.query.sqm.sql.internal.DomainResultProducer;
@@ -80,21 +81,30 @@ public class EntityTypeLiteral
 	}
 
 	@Override
-	public int forEachDisassembledJdbcValue(
-			Object value,
-			int offset,
-			JdbcValuesConsumer valuesConsumer,
-			SharedSessionContractImplementor session) {
-		return discriminatorType.forEachDisassembledJdbcValue( value, offset, valuesConsumer, session );
+	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
+		discriminatorType.addToCacheKey( cacheKey, value, session );
 	}
 
 	@Override
-	public int forEachJdbcValue(
+	public <X, Y> int forEachDisassembledJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		return discriminatorType.forEachJdbcValue( value, offset, valuesConsumer, session );
+		return discriminatorType.forEachDisassembledJdbcValue( value, offset, x, y, valuesConsumer, session );
+	}
+
+	@Override
+	public <X, Y> int forEachJdbcValue(
+			Object value,
+			int offset,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
+			SharedSessionContractImplementor session) {
+		return discriminatorType.forEachJdbcValue( value, offset, x, y, valuesConsumer, session );
 	}
 
 

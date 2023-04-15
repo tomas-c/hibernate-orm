@@ -8,6 +8,7 @@ package org.hibernate.engine.jdbc.dialect.internal;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.Map;
+import java.util.Set;
 
 import org.hibernate.HibernateException;
 import org.hibernate.boot.registry.selector.spi.StrategySelectionException;
@@ -33,6 +34,34 @@ import static org.hibernate.internal.log.DeprecationLogger.DEPRECATION_LOGGER;
  */
 public class DialectFactoryImpl implements DialectFactory, ServiceRegistryAwareService {
 	private static final CoreMessageLogger LOG = CoreLogging.messageLogger( "SQL dialect" );
+	private static final Set<String> LEGACY_DIALECTS = Set.of(
+			"org.hibernate.community.dialect.DB297Dialect",
+			"org.hibernate.community.dialect.DB2390Dialect",
+			"org.hibernate.community.dialect.DB2390V8Dialect",
+			"org.hibernate.community.dialect.DerbyTenFiveDialect",
+			"org.hibernate.community.dialect.DerbyTenSevenDialect",
+			"org.hibernate.community.dialect.DerbyTenSixDialect",
+			"org.hibernate.community.dialect.MariaDB10Dialect",
+			"org.hibernate.community.dialect.MariaDB53Dialect",
+			"org.hibernate.community.dialect.MariaDB102Dialect",
+			"org.hibernate.community.dialect.MySQL5Dialect",
+			"org.hibernate.community.dialect.MySQL55Dialect",
+			"org.hibernate.community.dialect.Oracle8iDialect",
+			"org.hibernate.community.dialect.Oracle9iDialect",
+			"org.hibernate.community.dialect.Oracle10gDialect",
+			"org.hibernate.community.dialect.PostgreSQL9Dialect",
+			"org.hibernate.community.dialect.PostgreSQL81Dialect",
+			"org.hibernate.community.dialect.PostgreSQL82Dialect",
+			"org.hibernate.community.dialect.PostgreSQL91Dialect",
+			"org.hibernate.community.dialect.PostgreSQL92Dialect",
+			"org.hibernate.community.dialect.PostgreSQL93Dialect",
+			"org.hibernate.community.dialect.PostgreSQL94Dialect",
+			"org.hibernate.community.dialect.PostgreSQL95Dialect",
+			"org.hibernate.community.dialect.SQLServer2005Dialect",
+			"org.hibernate.community.dialect.Sybase11Dialect",
+			"org.hibernate.community.dialect.SybaseASE15Dialect",
+			"org.hibernate.community.dialect.SybaseASE157Dialect"
+	);
 
 	private StrategySelector strategySelector;
 	private DialectResolver dialectResolver;
@@ -55,9 +84,9 @@ public class DialectFactoryImpl implements DialectFactory, ServiceRegistryAwareS
 	@Override
 	public Dialect buildDialect(Map<String,Object> configValues, DialectResolutionInfoSource resolutionInfoSource) throws HibernateException {
 		final Object dialectReference = configValues.get( AvailableSettings.DIALECT );
-		Dialect dialect = !isEmpty( dialectReference ) ?
-				constructDialect( dialectReference, resolutionInfoSource ) :
-				determineDialect( resolutionInfoSource );
+		Dialect dialect = !isEmpty( dialectReference )
+				? constructDialect( dialectReference, resolutionInfoSource )
+				: determineDialect( resolutionInfoSource );
 		logSelectedDialect( dialect );
 		return dialect;
 	}
@@ -75,6 +104,9 @@ public class DialectFactoryImpl implements DialectFactory, ServiceRegistryAwareS
 			else {
 				DEPRECATION_LOGGER.deprecatedDialect( dialectClass.getSimpleName() );
 			}
+		}
+		else if ( Dialect.class.getPackage() == dialectClass.getPackage() ) {
+			DEPRECATION_LOGGER.automaticDialect( dialectClass.getSimpleName() );
 		}
 	}
 
@@ -100,7 +132,7 @@ public class DialectFactoryImpl implements DialectFactory, ServiceRegistryAwareS
 					(dialectClass) -> {
 						try {
 							try {
-								if (resolutionInfoSource != null) {
+								if ( resolutionInfoSource != null ) {
 									return dialectClass.getConstructor( DialectResolutionInfo.class ).newInstance(
 											resolutionInfoSource.getDialectResolutionInfo()
 									);
@@ -123,6 +155,20 @@ public class DialectFactoryImpl implements DialectFactory, ServiceRegistryAwareS
 				throw new HibernateException( "Unable to construct requested dialect [" + dialectReference + "]" );
 			}
 			return dialect;
+		}
+		catch (StrategySelectionException e) {
+			final String dialectFqn = dialectReference.toString();
+			if ( LEGACY_DIALECTS.contains( dialectFqn ) ) {
+				throw new StrategySelectionException(
+						"Couldn't load the dialect class for the 'hibernate.dialect' [" + dialectFqn + "], " +
+								"because the application is missing a dependency on the hibernate-community-dialects module. " +
+								"Hibernate 6.2 dropped support for database versions that are unsupported by vendors  " +
+								"and code for old versions was moved to the hibernate-community-dialects module. " +
+								"For further information, read https://in.relation.to/2023/02/15/hibernate-orm-62-db-version-support/",
+						e
+				);
+			}
+			throw e;
 		}
 		catch (HibernateException e) {
 			throw e;

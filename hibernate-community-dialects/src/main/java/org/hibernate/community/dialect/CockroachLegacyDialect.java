@@ -30,22 +30,18 @@ import org.hibernate.boot.model.TypeContributions;
 import org.hibernate.dialect.DatabaseVersion;
 import org.hibernate.dialect.Dialect;
 import org.hibernate.dialect.NationalizationSupport;
+import org.hibernate.dialect.PgJdbcHelper;
 import org.hibernate.dialect.PostgreSQLCastingInetJdbcType;
 import org.hibernate.dialect.PostgreSQLCastingIntervalSecondJdbcType;
 import org.hibernate.dialect.PostgreSQLCastingJsonJdbcType;
 import org.hibernate.dialect.PostgreSQLDriverKind;
-import org.hibernate.dialect.PostgreSQLInetJdbcType;
-import org.hibernate.dialect.PostgreSQLIntervalSecondJdbcType;
-import org.hibernate.dialect.PostgreSQLJsonJdbcType;
-import org.hibernate.dialect.PostgreSQLJsonbJdbcType;
-import org.hibernate.dialect.PostgreSQLPGObjectJdbcType;
 import org.hibernate.dialect.RowLockStrategy;
 import org.hibernate.dialect.SimpleDatabaseVersion;
 import org.hibernate.dialect.SpannerDialect;
 import org.hibernate.dialect.TimeZoneSupport;
 import org.hibernate.dialect.function.CommonFunctionFactory;
 import org.hibernate.dialect.function.FormatFunction;
-import org.hibernate.dialect.function.PostgreSQLTruncRoundFunction;
+import org.hibernate.dialect.function.PostgreSQLTruncFunction;
 import org.hibernate.dialect.identity.CockroachDBIdentityColumnSupport;
 import org.hibernate.dialect.identity.IdentityColumnSupport;
 import org.hibernate.dialect.pagination.LimitHandler;
@@ -76,7 +72,6 @@ import org.hibernate.sql.ast.tree.Statement;
 import org.hibernate.sql.exec.spi.JdbcOperation;
 import org.hibernate.type.JavaObjectType;
 import org.hibernate.type.descriptor.jdbc.ArrayJdbcType;
-import org.hibernate.type.descriptor.jdbc.InstantAsTimestampWithTimeZoneJdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 import org.hibernate.type.descriptor.jdbc.ObjectNullAsBinaryTypeJdbcType;
 import org.hibernate.type.descriptor.jdbc.UUIDJdbcType;
@@ -114,8 +109,8 @@ public class CockroachLegacyDialect extends Dialect {
 
 	// Pre-compile and reuse pattern
 	private static final Pattern CRDB_VERSION_PATTERN = Pattern.compile( "v[\\d]+(\\.[\\d]+)?(\\.[\\d]+)?" );
-	private static final DatabaseVersion DEFAULT_VERSION = DatabaseVersion.make( 19, 2 );
-	private final PostgreSQLDriverKind driverKind;
+	protected static final DatabaseVersion DEFAULT_VERSION = DatabaseVersion.make( 19, 2 );
+	protected final PostgreSQLDriverKind driverKind;
 
 	public CockroachLegacyDialect() {
 		this( DEFAULT_VERSION );
@@ -199,6 +194,10 @@ public class CockroachLegacyDialect extends Dialect {
 			case BLOB:
 				return "bytes";
 
+			// We do not use the time with timezone type because PG deprecated it and it lacks certain operations like subtraction
+//			case TIME_UTC:
+//				return columnType( TIME_WITH_TIMEZONE );
+
 			case TIMESTAMP_UTC:
 				return columnType( TIMESTAMP_WITH_TIMEZONE );
 
@@ -273,6 +272,12 @@ public class CockroachLegacyDialect extends Dialect {
 						break;
 				}
 				break;
+			case TIME:
+				// The PostgreSQL JDBC driver reports TIME for timetz, but we use it only for mapping OffsetTime to UTC
+				if ( "timetz".equals( columnTypeName ) ) {
+					jdbcTypeCode = TIME_UTC;
+				}
+				break;
 			case TIMESTAMP:
 				// The PostgreSQL JDBC driver reports TIMESTAMP for timestamptz, but we use it only for mapping Instant
 				if ( "timestamptz".equals( columnTypeName ) ) {
@@ -322,21 +327,25 @@ public class CockroachLegacyDialect extends Dialect {
 	@Override
 	public void contributeTypes(TypeContributions typeContributions, ServiceRegistry serviceRegistry) {
 		super.contributeTypes( typeContributions, serviceRegistry );
+		contributeCockroachTypes( typeContributions, serviceRegistry );
+	}
 
+	protected void contributeCockroachTypes(TypeContributions typeContributions, ServiceRegistry serviceRegistry) {
 		final JdbcTypeRegistry jdbcTypeRegistry = typeContributions.getTypeConfiguration()
 				.getJdbcTypeRegistry();
-		jdbcTypeRegistry.addDescriptor( TIMESTAMP_UTC, InstantAsTimestampWithTimeZoneJdbcType.INSTANCE );
+		// Don't use this type due to https://github.com/pgjdbc/pgjdbc/issues/2862
+		//jdbcTypeRegistry.addDescriptor( TimestampUtcAsOffsetDateTimeJdbcType.INSTANCE );
 		if ( driverKind == PostgreSQLDriverKind.PG_JDBC ) {
 			jdbcTypeRegistry.addDescriptorIfAbsent( UUIDJdbcType.INSTANCE );
-			if ( PostgreSQLPGObjectJdbcType.isUsable() ) {
-				jdbcTypeRegistry.addDescriptorIfAbsent( PostgreSQLIntervalSecondJdbcType.INSTANCE );
+			if ( PgJdbcHelper.isUsable( serviceRegistry ) ) {
+				jdbcTypeRegistry.addDescriptorIfAbsent( PgJdbcHelper.getIntervalJdbcType( serviceRegistry ) );
 
 				if ( getVersion().isSameOrAfter( 20, 0 ) ) {
-					jdbcTypeRegistry.addDescriptorIfAbsent( PostgreSQLInetJdbcType.INSTANCE );
-					jdbcTypeRegistry.addDescriptorIfAbsent( PostgreSQLJsonbJdbcType.INSTANCE );
+					jdbcTypeRegistry.addDescriptorIfAbsent( PgJdbcHelper.getInetJdbcType( serviceRegistry ) );
+					jdbcTypeRegistry.addDescriptorIfAbsent( PgJdbcHelper.getJsonbJdbcType( serviceRegistry ) );
 				}
 				else {
-					jdbcTypeRegistry.addDescriptorIfAbsent( PostgreSQLJsonJdbcType.INSTANCE );
+					jdbcTypeRegistry.addDescriptorIfAbsent( PgJdbcHelper.getJsonJdbcType( serviceRegistry ) );
 				}
 			}
 			else {
@@ -424,7 +433,13 @@ public class CockroachLegacyDialect extends Dialect {
 
 		functionContributions.getFunctionRegistry().register(
 				"format",
-				new FormatFunction( "experimental_strftime", functionContributions.getTypeConfiguration() )
+				new FormatFunction(
+						"experimental_strftime",
+						false,
+						true,
+						false,
+						functionContributions.getTypeConfiguration()
+				)
 		);
 		functionFactory.windowFunctions();
 		functionFactory.listagg_stringAgg( "string" );
@@ -432,7 +447,11 @@ public class CockroachLegacyDialect extends Dialect {
 		functionFactory.hypotheticalOrderedSetAggregates_windowEmulation();
 
 		functionContributions.getFunctionRegistry().register(
-				"trunc", new PostgreSQLTruncRoundFunction( "trunc", getVersion().isSameOrAfter( 22, 2 ) )
+				"trunc",
+				new PostgreSQLTruncFunction(
+						getVersion().isSameOrAfter( 22, 2 ),
+						functionContributions.getTypeConfiguration()
+				)
 		);
 		functionContributions.getFunctionRegistry().registerAlternateKey( "truncate", "trunc" );
 	}
@@ -754,22 +773,30 @@ public class CockroachLegacyDialect extends Dialect {
 		if ( unit == null ) {
 			return "(?3-?2)";
 		}
-		switch (unit) {
-			case YEAR:
-				return "(extract(year from ?3)-extract(year from ?2))";
-			case QUARTER:
-				return "(extract(year from ?3)*4-extract(year from ?2)*4+extract(month from ?3)//3-extract(month from ?2)//3)";
-			case MONTH:
-				return "(extract(year from ?3)*12-extract(year from ?2)*12+extract(month from ?3)-extract(month from ?2))";
-		}
-		if ( toTemporalType != TemporalType.TIMESTAMP && fromTemporalType != TemporalType.TIMESTAMP ) {
+		if ( toTemporalType == TemporalType.DATE && fromTemporalType == TemporalType.DATE ) {
 			// special case: subtraction of two dates
 			// results in an integer number of days
 			// instead of an INTERVAL
-			return "(?3-?2)" + DAY.conversionFactor( unit, this );
+			switch ( unit ) {
+				case YEAR:
+				case MONTH:
+				case QUARTER:
+					// age only supports timestamptz, so we have to cast the date expressions
+					return "extract(" + translateDurationField( unit ) + " from age(cast(?3 as timestamptz),cast(?2 as timestamptz)))";
+				default:
+					return "(?3-?2)" + DAY.conversionFactor( unit, this );
+			}
 		}
 		else {
 			switch (unit) {
+				case YEAR:
+					return "extract(year from ?3-?2)";
+				case QUARTER:
+					return "(extract(year from ?3-?2)*4+extract(month from ?3-?2)//3)";
+				case MONTH:
+					return "(extract(year from ?3-?2)*12+extract(month from ?3-?2))";
+				// Prior to v20, Cockroach didn't support extracting from an interval/duration,
+				// so we use the extract_duration function
 				case WEEK:
 					return "extract_duration(hour from ?3-?2)/168";
 				case DAY:

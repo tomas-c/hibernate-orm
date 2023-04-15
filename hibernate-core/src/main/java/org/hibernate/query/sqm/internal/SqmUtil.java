@@ -22,7 +22,7 @@ import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.util.collections.CollectionHelper;
 import org.hibernate.metamodel.MappingMetamodel;
-import org.hibernate.metamodel.mapping.BasicValuedModelPart;
+import org.hibernate.metamodel.mapping.BasicValuedMapping;
 import org.hibernate.metamodel.mapping.Bindable;
 import org.hibernate.metamodel.mapping.EntityAssociationMapping;
 import org.hibernate.metamodel.mapping.EntityIdentifierMapping;
@@ -31,6 +31,7 @@ import org.hibernate.metamodel.mapping.ForeignKeyDescriptor;
 import org.hibernate.metamodel.mapping.JdbcMapping;
 import org.hibernate.metamodel.mapping.MappingModelExpressible;
 import org.hibernate.metamodel.mapping.PluralAttributeMapping;
+import org.hibernate.type.JavaObjectType;
 import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
 import org.hibernate.query.IllegalQueryOperationException;
 import org.hibernate.query.IllegalSelectQueryException;
@@ -48,7 +49,6 @@ import org.hibernate.query.sqm.tree.expression.SqmJpaCriteriaParameterWrapper;
 import org.hibernate.query.sqm.tree.expression.SqmParameter;
 import org.hibernate.query.sqm.tree.jpa.ParameterCollector;
 import org.hibernate.query.sqm.tree.select.SqmSelectStatement;
-import org.hibernate.sql.ast.Clause;
 import org.hibernate.sql.ast.SqlTreeCreationException;
 import org.hibernate.sql.ast.tree.expression.JdbcParameter;
 import org.hibernate.sql.ast.tree.from.TableGroup;
@@ -292,8 +292,8 @@ public class SqmUtil {
 					if ( domainParamBinding.getType() instanceof JdbcMapping ) {
 						jdbcMapping = (JdbcMapping) domainParamBinding.getType();
 					}
-					else if ( domainParamBinding.getBindType() instanceof BasicValuedModelPart ) {
-						jdbcMapping = ( (BasicValuedModelPart) domainParamBinding.getType() ).getJdbcMapping();
+					else if ( domainParamBinding.getBindType() instanceof BasicValuedMapping ) {
+						jdbcMapping = ( (BasicValuedMapping) domainParamBinding.getType() ).getJdbcMapping();
 					}
 					else {
 						jdbcMapping = null;
@@ -386,10 +386,12 @@ public class SqmUtil {
 				parameterType = association.getForeignKeyDescriptor();
 			}
 		}
+		else if ( parameterType instanceof JavaObjectType ) {
+			parameterType = domainParamBinding.getType();
+		}
 
 		int offset = jdbcParameterBindings.registerParametersForEachJdbcValue(
 				bindValue,
-				Clause.IRRELEVANT,
 				parameterType,
 				jdbcParams,
 				session

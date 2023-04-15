@@ -17,6 +17,7 @@ import org.hibernate.LockOptions;
 import org.hibernate.MappingException;
 import org.hibernate.bytecode.enhance.spi.interceptor.EnhancementAsProxyLazinessInterceptor;
 import org.hibernate.bytecode.spi.BytecodeEnhancementMetadata;
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.cache.spi.access.EntityDataAccess;
 import org.hibernate.cache.spi.access.NaturalIdDataAccess;
 import org.hibernate.cache.spi.entry.CacheEntry;
@@ -490,21 +491,36 @@ public interface EntityPersister extends EntityMappingType, RootTableGroupProduc
 	}
 
 	@Override
-	default void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
+	default <X, Y> int breakDownJdbcValues(
+			Object domainValue,
+			int offset,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
+			SharedSessionContractImplementor session) {
+		int span = 0;
 		if ( domainValue instanceof Object[] ) {
 			final Object[] values = (Object[]) domainValue;
 			for ( int i = 0; i < getNumberOfAttributeMappings(); i++ ) {
 				final AttributeMapping attributeMapping = getAttributeMapping( i );
-				attributeMapping.breakDownJdbcValues( values[ i ], valueConsumer, session );
+				span += attributeMapping.breakDownJdbcValues( values[ i ], offset + span, x, y, valueConsumer, session );
 			}
 		}
 		else {
 			for ( int i = 0; i < getNumberOfAttributeMappings(); i++ ) {
 				final AttributeMapping attributeMapping = getAttributeMapping( i );
 				final Object attributeValue = attributeMapping.getPropertyAccess().getGetter().get( domainValue );
-				attributeMapping.breakDownJdbcValues( attributeValue, valueConsumer, session );
+				span += attributeMapping.breakDownJdbcValues(
+						attributeValue,
+						offset + span,
+						x,
+						y,
+						valueConsumer,
+						session
+				);
 			}
 		}
+		return span;
 	}
 
 	/**
@@ -573,6 +589,14 @@ public interface EntityPersister extends EntityMappingType, RootTableGroupProduc
 	 * @return The loaded, matching entities
 	 */
 	List<?> multiLoad(Object[] ids, EventSource session, MultiIdLoadOptions loadOptions);
+
+	@Override
+	default Object loadByUniqueKey(String propertyName, Object uniqueKey, SharedSessionContractImplementor session) {
+		throw new UnsupportedOperationException(
+				"EntityPersister implementation '" + getClass().getName()
+						+ "' does not support 'UniqueKeyLoadable'"
+		);
+	}
 
 	/**
 	 * Do a version check (optional operation)
@@ -658,6 +682,10 @@ public interface EntityPersister extends EntityMappingType, RootTableGroupProduc
 	 * Get the cascade styles of the properties (optional operation)
 	 */
 	CascadeStyle[] getPropertyCascadeStyles();
+
+	default boolean isPropertySelectable(int propertyNumber) {
+		return true;
+	}
 
 	/**
 	 * Get the identifier type
@@ -982,6 +1010,14 @@ public interface EntityPersister extends EntityMappingType, RootTableGroupProduc
 	@Override
 	default EntityMappingType getEntityMappingType() {
 		return this;
+	}
+
+	@Override
+	default void addToCacheKey(
+			MutableCacheKeyBuilder cacheKey,
+			Object value,
+			SharedSessionContractImplementor session) {
+		getIdentifierMapping().addToCacheKey( cacheKey, value, session );
 	}
 
 	BytecodeEnhancementMetadata getInstrumentationMetadata();

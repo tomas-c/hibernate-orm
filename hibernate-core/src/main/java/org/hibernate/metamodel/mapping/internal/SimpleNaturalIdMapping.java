@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.function.BiConsumer;
 
 import org.hibernate.HibernateException;
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.spi.PersistenceContext;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.util.IndexedConsumer;
@@ -243,26 +244,41 @@ public class SimpleNaturalIdMapping extends AbstractNaturalIdMapping implements 
 	}
 
 	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		attribute.breakDownJdbcValues( domainValue, valueConsumer, session );
+	public void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session) {
+		attribute.addToCacheKey( cacheKey, value, session );
 	}
 
 	@Override
-	public int forEachDisassembledJdbcValue(
-			Object value,
+	public <X, Y> int breakDownJdbcValues(
+			Object domainValue,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValueBiConsumer<X, Y> valueConsumer,
 			SharedSessionContractImplementor session) {
-		return attribute.forEachDisassembledJdbcValue( value, offset, valuesConsumer, session );
+		return attribute.breakDownJdbcValues( domainValue, offset, x, y, valueConsumer, session );
 	}
 
 	@Override
-	public int forEachJdbcValue(
+	public <X, Y> int forEachDisassembledJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer valuesConsumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		return attribute.forEachJdbcValue( value, offset, valuesConsumer, session );
+		return attribute.forEachDisassembledJdbcValue( value, offset, x, y, valuesConsumer, session );
+	}
+
+	@Override
+	public <X, Y> int forEachJdbcValue(
+			Object value,
+			int offset,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
+			SharedSessionContractImplementor session) {
+		return attribute.forEachJdbcValue( value, offset, x, y, valuesConsumer, session );
 	}
 
 	@Override

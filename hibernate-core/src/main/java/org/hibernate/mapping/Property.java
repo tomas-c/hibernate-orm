@@ -18,6 +18,7 @@ import org.hibernate.Internal;
 import org.hibernate.MappingException;
 import org.hibernate.boot.model.relational.Database;
 import org.hibernate.bytecode.enhance.spi.interceptor.EnhancementHelper;
+import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.engine.spi.CascadeStyle;
 import org.hibernate.engine.spi.CascadeStyles;
 import org.hibernate.engine.spi.Mapping;
@@ -33,10 +34,11 @@ import org.hibernate.generator.Generator;
 import org.hibernate.generator.GeneratorCreationContext;
 import org.hibernate.type.CompositeType;
 import org.hibernate.type.Type;
+import org.hibernate.type.WrapperArrayHandling;
 
 /**
- * A mapping model object representing a property or field of an {@link PersistentClass entity}
- * or {@link Component embeddable class}.
+ * A mapping model object representing a property or field of an {@linkplain PersistentClass entity}
+ * or {@linkplain Component embeddable class}.
  *
  * @author Gavin King
  */
@@ -57,6 +59,7 @@ public class Property implements Serializable, MetaAttributable {
 	private java.util.Map metaAttributes;
 	private PersistentClass persistentClass;
 	private boolean naturalIdentifier;
+	private boolean isGeneric;
 	private boolean lob;
 	private java.util.List<CallbackDefinition> callbackDefinitions;
 	private String returnedClassName;
@@ -281,7 +284,23 @@ public class Property implements Serializable, MetaAttributable {
 	}
 
 	public boolean isValid(Mapping mapping) throws MappingException {
-		return getValue().isValid( mapping );
+		final Value value = getValue();
+		if ( value instanceof BasicValue && ( (BasicValue) value ).isDisallowedWrapperArray() ) {
+			throw new MappingException(
+					"The property " + persistentClass.getEntityName() + "#" + name +
+							" uses a wrapper type Byte[]/Character[] which indicates an issue in your domain model. " +
+							"These types have been treated like byte[]/char[] until Hibernate 6.2 which meant that " +
+							"null elements were not allowed, but on JDBC were processed like VARBINARY or VARCHAR. " +
+							"If you don't use nulls in your arrays, change the type of the property to byte[]/char[]. " +
+							"To allow explicit uses of the wrapper types Byte[]/Character[] which allows null element " +
+							"but has a different serialization format than before Hibernate 6.2, configure the " +
+							"setting " + AvailableSettings.WRAPPER_ARRAY_HANDLING + " to the value " + WrapperArrayHandling.ALLOW + ". " +
+							"To revert to the legacy treatment of these types, configure the value to " + WrapperArrayHandling.LEGACY + ". " +
+							"For more information on this matter, consult the migration guide of Hibernate 6.2 " +
+							"and the Javadoc of the org.hibernate.cfg.AvailableSettings.WRAPPER_ARRAY_HANDLING field."
+			);
+		}
+		return value.isValid( mapping );
 	}
 
 	public String toString() {
@@ -417,6 +436,14 @@ public class Property implements Serializable, MetaAttributable {
 		this.naturalIdentifier = naturalIdentifier;
 	}
 
+	public boolean isGeneric() {
+		return isGeneric;
+	}
+
+	public void setGeneric(boolean generic) {
+		this.isGeneric = generic;
+	}
+
 	public boolean isLob() {
 		return lob;
 	}
@@ -473,6 +500,7 @@ public class Property implements Serializable, MetaAttributable {
 		property.setMetaAttributes( getMetaAttributes() );
 		property.setPersistentClass( getPersistentClass() );
 		property.setNaturalIdentifier( isNaturalIdentifier() );
+		property.setGeneric( isGeneric() );
 		property.setLob( isLob() );
 		property.addCallbackDefinitions( getCallbackDefinitions() );
 		property.setReturnedClassName( getReturnedClassName() );

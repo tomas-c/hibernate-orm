@@ -18,13 +18,11 @@ import org.hibernate.Internal;
 import org.hibernate.boot.Metadata;
 import org.hibernate.boot.model.naming.Identifier;
 import org.hibernate.boot.model.relational.AuxiliaryDatabaseObject;
-import org.hibernate.boot.model.relational.Database;
 import org.hibernate.boot.model.relational.Exportable;
 import org.hibernate.boot.model.relational.InitCommand;
 import org.hibernate.boot.model.relational.Namespace;
 import org.hibernate.boot.model.relational.Sequence;
 import org.hibernate.boot.model.relational.SqlStringGenerationContext;
-import org.hibernate.boot.model.relational.internal.SqlStringGenerationContextImpl;
 import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
 import org.hibernate.boot.spi.MetadataImplementor;
 import org.hibernate.dialect.Dialect;
@@ -46,7 +44,6 @@ import org.hibernate.tool.schema.internal.exec.GenerationTarget;
 import org.hibernate.tool.schema.internal.exec.JdbcContext;
 import org.hibernate.tool.schema.internal.exec.ScriptSourceInputFromUrl;
 import org.hibernate.tool.schema.internal.exec.ScriptSourceInputNonExistentImpl;
-import org.hibernate.tool.schema.spi.CommandAcceptanceException;
 import org.hibernate.tool.schema.spi.ContributableMatcher;
 import org.hibernate.tool.schema.spi.ExceptionHandler;
 import org.hibernate.tool.schema.spi.ExecutionOptions;
@@ -63,9 +60,11 @@ import static org.hibernate.cfg.AvailableSettings.HBM2DDL_CHARSET_NAME;
 import static org.hibernate.cfg.AvailableSettings.HBM2DDL_IMPORT_FILES;
 import static org.hibernate.cfg.AvailableSettings.HBM2DDL_LOAD_SCRIPT_SOURCE;
 import static org.hibernate.cfg.AvailableSettings.JAKARTA_HBM2DDL_LOAD_SCRIPT_SOURCE;
-import static org.hibernate.internal.util.StringHelper.isNotEmpty;
 import static org.hibernate.internal.util.collections.CollectionHelper.setOfSize;
 import static org.hibernate.internal.util.config.ConfigurationHelper.getString;
+import static org.hibernate.tool.schema.internal.Helper.applyScript;
+import static org.hibernate.tool.schema.internal.Helper.applySqlStrings;
+import static org.hibernate.tool.schema.internal.Helper.createSqlStringGenerationContext;
 import static org.hibernate.tool.schema.internal.Helper.interpretFormattingEnabled;
 import static org.hibernate.tool.schema.internal.Helper.interpretScriptSourceSetting;
 
@@ -200,12 +199,7 @@ public class SchemaCreatorImpl implements SchemaCreator {
 			Dialect dialect,
 			ExecutionOptions options,
 			GenerationTarget... targets) {
-		final List<String> commands = scriptSourceInput.extract(
-				reader -> commandExtractor.extractCommands( reader, dialect )
-		);
-		for ( String command : commands ) {
-			applySqlString( command, formatter, options, targets );
-		}
+		applyScript( options, commandExtractor, dialect, scriptSourceInput, formatter, targets );
 	}
 
 	@Internal
@@ -222,15 +216,6 @@ public class SchemaCreatorImpl implements SchemaCreator {
 				dialect,
 				formatter,
 				targets
-		);
-	}
-
-	private static SqlStringGenerationContext createSqlStringGenerationContext(ExecutionOptions options, Metadata metadata) {
-		final Database database = metadata.getDatabase();
-		return SqlStringGenerationContextImpl.fromConfigurationMap(
-				database.getJdbcEnvironment(),
-				database,
-				options.getConfigurationValues()
 		);
 	}
 
@@ -524,10 +509,12 @@ public class SchemaCreatorImpl implements SchemaCreator {
 			Set<Identifier> exportedCatalogs = new HashSet<>();
 			for ( Namespace namespace : metadata.getDatabase().getNamespaces() ) {
 				if ( options.getSchemaFilter().includeNamespace( namespace ) ) {
+					Namespace.Name logicalName = namespace.getName();
+					Namespace.Name physicalName = namespace.getPhysicalName();
+
 					if ( tryToCreateCatalogs ) {
-						final Identifier catalogLogicalName = namespace.getName().getCatalog();
-						final Identifier catalogPhysicalName =
-								context.catalogWithDefault( namespace.getPhysicalName().getCatalog() );
+						final Identifier catalogLogicalName = logicalName.getCatalog();
+						final Identifier catalogPhysicalName = context.catalogWithDefault( physicalName.getCatalog() );
 						if ( catalogPhysicalName != null && !exportedCatalogs.contains( catalogLogicalName ) ) {
 							applySqlStrings(
 									dialect.getCreateCatalogCommand( catalogPhysicalName.render( dialect ) ),
@@ -539,15 +526,16 @@ public class SchemaCreatorImpl implements SchemaCreator {
 						}
 					}
 
-					final Identifier schemaPhysicalName =
-							context.schemaWithDefault( namespace.getPhysicalName().getSchema() );
-					if ( tryToCreateSchemas && schemaPhysicalName != null ) {
-						applySqlStrings(
-								dialect.getCreateSchemaCommand( schemaPhysicalName.render( dialect ) ),
-								formatter,
-								options,
-								targets
-						);
+					if ( tryToCreateSchemas ) {
+						final Identifier schemaPhysicalName = context.schemaWithDefault( physicalName.getSchema() );
+						if ( schemaPhysicalName != null ) {
+							applySqlStrings(
+									dialect.getCreateSchemaCommand( schemaPhysicalName.render( dialect ) ),
+									formatter,
+									options,
+									targets
+							);
+						}
 					}
 				}
 			}
@@ -560,36 +548,6 @@ public class SchemaCreatorImpl implements SchemaCreator {
 			throw new SchemaManagementException( "SQL strings added more than once for: " + exportIdentifier );
 		}
 		exportIdentifiers.add( exportIdentifier );
-	}
-
-	private static void applySqlStrings(
-			String[] sqlStrings,
-			Formatter formatter,
-			ExecutionOptions options,
-			GenerationTarget... targets) {
-		if ( sqlStrings != null ) {
-			for ( String sqlString : sqlStrings ) {
-				applySqlString( sqlString, formatter, options, targets );
-			}
-		}
-	}
-
-	private static void applySqlString(
-			String sqlString,
-			Formatter formatter,
-			ExecutionOptions options,
-			GenerationTarget... targets) {
-		if ( isNotEmpty( sqlString ) ) {
-			try {
-				final String sqlStringFormatted = formatter.format( sqlString );
-				for ( GenerationTarget target : targets ) {
-					target.accept( sqlStringFormatted );
-				}
-			}
-			catch (CommandAcceptanceException e) {
-				options.getExceptionHandler().handleException( e );
-			}
-		}
 	}
 
 	private void applyImportSources(
@@ -650,7 +608,7 @@ public class SchemaCreatorImpl implements SchemaCreator {
 		if ( importScriptSetting != null ) {
 			final ScriptSourceInput importScriptInput =
 					interpretScriptSourceSetting( importScriptSetting, getClassLoaderService(), getCharsetName( options ) );
-			applyImportScript(
+			applyScript(
 					options,
 					commandExtractor,
 					dialect,
@@ -689,7 +647,7 @@ public class SchemaCreatorImpl implements SchemaCreator {
 		for ( String currentFile : importFiles ) {
 			final String resourceName = currentFile.trim();
 			if ( !resourceName.isEmpty() ) { //skip empty resource names
-				applyImportScript(
+				applyScript(
 						options,
 						commandExtractor,
 						dialect,
@@ -698,21 +656,6 @@ public class SchemaCreatorImpl implements SchemaCreator {
 						targets
 				);
 			}
-		}
-	}
-
-	private static void applyImportScript(
-			ExecutionOptions options,
-			SqlScriptCommandExtractor commandExtractor,
-			Dialect dialect,
-			ScriptSourceInput importScriptInput,
-			Formatter formatter,
-			GenerationTarget[] targets) {
-		final List<String> commands = importScriptInput.extract(
-				reader -> commandExtractor.extractCommands( reader, dialect )
-		);
-		for ( String command : commands ) {
-			applySqlString( command, formatter, options, targets );
 		}
 	}
 

@@ -10,11 +10,16 @@ import java.util.List;
 
 import org.hibernate.Internal;
 import org.hibernate.dialect.Dialect;
+import org.hibernate.engine.jdbc.batch.spi.BatchKey;
 import org.hibernate.engine.jdbc.mutation.JdbcValueBindings;
 import org.hibernate.engine.jdbc.mutation.ParameterUsage;
+import org.hibernate.engine.jdbc.mutation.internal.NoBatchKeyAccess;
+import org.hibernate.engine.jdbc.mutation.spi.BatchKeyAccess;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
+import org.hibernate.generator.OnExecutionGenerator;
 import org.hibernate.metamodel.mapping.AttributeMapping;
+import org.hibernate.metamodel.mapping.AttributeMappingsList;
 import org.hibernate.persister.entity.AbstractEntityPersister;
 import org.hibernate.sql.model.ModelMutationLogging;
 import org.hibernate.sql.model.MutationOperation;
@@ -26,7 +31,6 @@ import org.hibernate.sql.model.ast.builder.MutationGroupBuilder;
 import org.hibernate.sql.model.internal.MutationOperationGroupNone;
 import org.hibernate.sql.model.internal.MutationOperationGroupSingle;
 import org.hibernate.sql.model.internal.MutationOperationGroupStandard;
-import org.hibernate.generator.OnExecutionGenerator;
 
 import static org.hibernate.internal.util.collections.CollectionHelper.arrayList;
 
@@ -58,6 +62,18 @@ public abstract class AbstractMutationCoordinator {
 	protected Dialect dialect() {
 		return factory().getJdbcServices().getDialect();
 	}
+
+	protected BatchKeyAccess resolveBatchKeyAccess(boolean dynamicUpdate, SharedSessionContractImplementor session) {
+		if ( !dynamicUpdate
+				&& session.getTransactionCoordinator() != null
+				&& session.getTransactionCoordinator().isTransactionActive() ) {
+			return this::getBatchKey;
+		}
+
+		return NoBatchKeyAccess.INSTANCE;
+	}
+
+	protected abstract BatchKey getBatchKey();
 
 	protected MutationOperationGroup createOperationGroup(ValuesAnalysis valuesAnalysis, MutationGroup mutationGroup) {
 		final int numberOfTableMutations = mutationGroup.getNumberOfTableMutations();
@@ -112,26 +128,31 @@ public abstract class AbstractMutationCoordinator {
 			Object[] loadedState,
 			SharedSessionContractImplementor session,
 			JdbcValueBindings jdbcValueBindings) {
-		if ( entityPersister().hasPartitionedSelectionMapping() ) {
-			entityPersister().forEachAttributeMapping(
-					(index, attributeMapping) -> {
-						if ( attributeMapping.hasPartitionedSelectionMapping() ) {
-							attributeMapping.decompose(
-									loadedState[index],
-									(value, jdbcValueMapping) -> {
-										if ( jdbcValueMapping.isPartitioned() ) {
-											jdbcValueBindings.bindValue(
-													value,
-													jdbcValueMapping,
-													ParameterUsage.RESTRICT
-											);
-										}
-									},
-									session
-							);
-						}
-					}
-			);
+		final AbstractEntityPersister persister = entityPersister();
+		if ( persister.hasPartitionedSelectionMapping() ) {
+			final AttributeMappingsList attributeMappings = persister.getAttributeMappings();
+			final int size = attributeMappings.size();
+			for ( int i = 0; i < size; i++ ) {
+				final AttributeMapping attributeMapping = attributeMappings.get( i );
+				if ( attributeMapping.hasPartitionedSelectionMapping() ) {
+					attributeMapping.decompose(
+							loadedState[i],
+							0,
+							jdbcValueBindings,
+							null,
+							(valueIndex, bindings, noop, value, jdbcValueMapping) -> {
+								if ( jdbcValueMapping.isPartitioned() ) {
+									bindings.bindValue(
+											value,
+											jdbcValueMapping,
+											ParameterUsage.RESTRICT
+									);
+								}
+							},
+							session
+					);
+				}
+			}
 		}
 	}
 }

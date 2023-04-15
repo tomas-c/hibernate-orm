@@ -20,6 +20,7 @@ import org.hibernate.boot.model.TypeDefinition;
 import org.hibernate.boot.model.convert.internal.ClassBasedConverterDescriptor;
 import org.hibernate.boot.model.convert.spi.ConverterDescriptor;
 import org.hibernate.boot.model.convert.spi.JpaAttributeConverterCreationContext;
+import org.hibernate.boot.model.process.internal.EnumeratedValueResolution;
 import org.hibernate.boot.model.process.internal.InferredBasicValueResolution;
 import org.hibernate.boot.model.process.internal.InferredBasicValueResolver;
 import org.hibernate.boot.model.process.internal.NamedBasicTypeResolution;
@@ -46,6 +47,7 @@ import org.hibernate.tool.schema.extract.spi.ColumnTypeInformation;
 import org.hibernate.type.BasicType;
 import org.hibernate.type.CustomType;
 import org.hibernate.type.Type;
+import org.hibernate.type.WrapperArrayHandling;
 import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
 import org.hibernate.type.descriptor.java.BasicJavaType;
 import org.hibernate.type.descriptor.java.BasicPluralJavaType;
@@ -435,8 +437,9 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 								getTypeConfiguration(),
 								getDialect(),
 								registeredElementType,
-								column instanceof ColumnTypeInformation ? (ColumnTypeInformation) column : null
-						);
+								column instanceof ColumnTypeInformation ? (ColumnTypeInformation) column : null,
+								this
+				);
 				if ( registeredType != null ) {
 					getTypeConfiguration().getBasicTypeRegistry().register( registeredType );
 
@@ -479,13 +482,13 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 					jdbcType,
 					resolvedJavaType,
 					this::determineReflectedJavaType,
+					explicitMutabilityPlanAccess,
 					this,
 					getTable(),
 					column,
 					ownerName,
 					propertyName,
-					getDialect(),
-					getTypeConfiguration()
+					getBuildingContext()
 			);
 		}
 	}
@@ -568,7 +571,6 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 			}
 		};
 
-
 		// Name could refer to:
 		//		1) a named converter - HBM support for JPA's AttributeConverter via its `type="..."` XML attribute
 		//		2) a "named composed" mapping - like (1), this is mainly to support envers since it tells
@@ -586,6 +588,10 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 					converterCreationContext,
 					context
 			);
+		}
+
+		if ( name.startsWith( EnumeratedValueResolution.PREFIX ) ) {
+			return EnumeratedValueResolution.fromName( name, stdIndicators, context );
 		}
 
 		if ( name.startsWith( BasicTypeImpl.EXTERNALIZED_PREFIX ) ) {
@@ -851,6 +857,19 @@ public class BasicValue extends SimpleValue implements JdbcTypeIndicators, Resol
 	@Override
 	public Object accept(ValueVisitor visitor) {
 		return visitor.accept(this);
+	}
+
+	@Internal
+	public boolean isDisallowedWrapperArray() {
+		return getBuildingContext().getBuildingOptions().getWrapperArrayHandling() == WrapperArrayHandling.DISALLOW
+				&& !isLob()
+				&& ( explicitJavaTypeAccess == null || explicitJavaTypeAccess.apply( getTypeConfiguration() ) == null )
+				&& isWrapperByteOrCharacterArray();
+	}
+
+	private boolean isWrapperByteOrCharacterArray() {
+		final Class<?> javaTypeClass = getResolution().getDomainJavaType().getJavaTypeClass();
+		return javaTypeClass == Byte[].class || javaTypeClass == Character[].class;
 	}
 
 	/**

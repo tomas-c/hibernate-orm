@@ -13,6 +13,7 @@ import java.util.UUID;
 
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 /**
  * Specifies that an entity identifier is generated as an RFC 4122 UUID.
@@ -23,18 +24,19 @@ import static java.lang.annotation.ElementType.METHOD;
  *
  * @since 6.0
  */
-@IdGeneratorType( org.hibernate.id.uuid.UuidGenerator.class )
-@Retention(RetentionPolicy.RUNTIME)
+@IdGeneratorType(org.hibernate.id.uuid.UuidGenerator.class)
+@ValueGenerationType(generatedBy = org.hibernate.id.uuid.UuidGenerator.class)
+@Retention(RUNTIME)
 @Target({ FIELD, METHOD })
 public @interface UuidGenerator {
 
 	enum Style {
 		/**
-		 * Defaults to {@link #RANDOM}
+		 * Defaults to {@link #RANDOM}.
 		 */
 		AUTO,
 		/**
-		 * Uses {@link UUID#randomUUID()} to generate values
+		 * Uses {@link UUID#randomUUID()} to generate values.
 		 */
 		RANDOM,
 		/**
@@ -48,7 +50,7 @@ public @interface UuidGenerator {
 	}
 
 	/**
-	 * Which style of generation should be used
+	 * Specifies which {@linkplain Style style} of UUID generation should be used.
 	 */
 	Style style() default Style.AUTO;
 }

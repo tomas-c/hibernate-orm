@@ -8,10 +8,11 @@ package org.hibernate.sql.exec.spi;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
-import org.hibernate.internal.FilterJdbcParameter;
 import org.hibernate.query.spi.QueryOptions;
+import org.hibernate.sql.ast.tree.expression.JdbcParameter;
 
 /**
  * Executable JDBC command
@@ -48,13 +49,13 @@ public class JdbcOperationQueryMutationNative implements JdbcOperationQueryMutat
 	}
 
 	@Override
-	public Set<FilterJdbcParameter> getFilterJdbcParameters() {
-		return Collections.EMPTY_SET;
+	public boolean dependsOnParameterBindings() {
+		return false;
 	}
 
 	@Override
-	public boolean dependsOnParameterBindings() {
-		return false;
+	public Map<JdbcParameter, JdbcParameterBinding> getAppliedParameters() {
+		return Collections.emptyMap();
 	}
 
 	@Override

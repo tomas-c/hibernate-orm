@@ -11,7 +11,10 @@ import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.temporal.ChronoField;
+import java.time.temporal.TemporalAccessor;
 import java.util.Locale;
+import java.util.TimeZone;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -23,12 +26,11 @@ import org.hibernate.cfg.Environment;
 import org.hibernate.dialect.BooleanDecoder;
 import org.hibernate.dialect.DatabaseVersion;
 import org.hibernate.dialect.Dialect;
-import org.hibernate.dialect.OracleArrayJdbcType;
 import org.hibernate.dialect.OracleBooleanJdbcType;
+import org.hibernate.dialect.OracleJdbcHelper;
 import org.hibernate.dialect.OracleJsonJdbcType;
+import org.hibernate.dialect.OracleReflectionStructJdbcType;
 import org.hibernate.dialect.OracleTypes;
-import org.hibernate.dialect.OracleStructJdbcType;
-import org.hibernate.dialect.OracleTypesHelper;
 import org.hibernate.dialect.OracleXmlJdbcType;
 import org.hibernate.dialect.Replacer;
 import org.hibernate.dialect.RowLockStrategy;
@@ -38,6 +40,7 @@ import org.hibernate.dialect.aggregate.OracleAggregateSupport;
 import org.hibernate.dialect.function.CommonFunctionFactory;
 import org.hibernate.dialect.function.ModeStatsModeEmulation;
 import org.hibernate.dialect.function.NvlCoalesceEmulation;
+import org.hibernate.dialect.function.OracleTruncFunction;
 import org.hibernate.dialect.identity.IdentityColumnSupport;
 import org.hibernate.dialect.identity.Oracle12cIdentityColumnSupport;
 import org.hibernate.dialect.pagination.LegacyOracleLimitHandler;
@@ -93,6 +96,7 @@ import org.hibernate.type.SqlTypes;
 import org.hibernate.type.StandardBasicTypes;
 import org.hibernate.type.descriptor.java.PrimitiveByteArrayJavaType;
 import org.hibernate.type.descriptor.jdbc.AggregateJdbcType;
+import org.hibernate.type.descriptor.jdbc.ArrayJdbcType;
 import org.hibernate.type.descriptor.jdbc.BlobJdbcType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
 import org.hibernate.type.descriptor.jdbc.OracleJsonBlobJdbcType;
@@ -134,6 +138,7 @@ import static org.hibernate.type.SqlTypes.TIME_WITH_TIMEZONE;
 import static org.hibernate.type.SqlTypes.TINYINT;
 import static org.hibernate.type.SqlTypes.VARBINARY;
 import static org.hibernate.type.SqlTypes.VARCHAR;
+import static org.hibernate.type.descriptor.DateTimeUtils.appendAsTimestampWithNanos;
 
 /**
  * A {@linkplain Dialect SQL dialect} for Oracle 8i and above.
@@ -151,6 +156,13 @@ public class OracleLegacyDialect extends Dialect {
 	private static final int PARAM_LIST_SIZE_LIMIT = 1000;
 
 	public static final String PREFER_LONG_RAW = "hibernate.dialect.oracle.prefer_long_raw";
+
+	private static final String yqmSelect =
+			"( TRUNC(%2$s, 'MONTH') + NUMTOYMINTERVAL(%1$s, 'MONTH') + ( LEAST( EXTRACT( DAY FROM %2$s ), EXTRACT( DAY FROM LAST_DAY( TRUNC(%2$s, 'MONTH') + NUMTOYMINTERVAL(%1$s, 'MONTH') ) ) ) - 1 ) )";
+
+	private static final String ADD_YEAR_EXPRESSION = String.format( yqmSelect, "?2*12", "?3" );
+	private static final String ADD_QUARTER_EXPRESSION = String.format( yqmSelect, "?2*3", "?3" );
+	private static final String ADD_MONTH_EXPRESSION = String.format( yqmSelect, "?2", "?3" );
 
 	private final LimitHandler limitHandler = supportsFetchClause( FetchClauseType.ROWS_ONLY )
 			? Oracle12LimitHandler.INSTANCE
@@ -185,7 +197,6 @@ public class OracleLegacyDialect extends Dialect {
 		functionFactory.cosh();
 		functionFactory.sinh();
 		functionFactory.tanh();
-		functionFactory.trunc();
 		functionFactory.log();
 		functionFactory.log10_log();
 		functionFactory.soundex();
@@ -255,6 +266,11 @@ public class OracleLegacyDialect extends Dialect {
 				"mode",
 				new ModeStatsModeEmulation( typeConfiguration )
 		);
+		functionContributions.getFunctionRegistry().register(
+				"trunc",
+				new OracleTruncFunction( functionContributions.getTypeConfiguration() )
+		);
+		functionContributions.getFunctionRegistry().registerAlternateKey( "truncate", "trunc" );
 	}
 
 	@Override
@@ -309,6 +325,11 @@ public class OracleLegacyDialect extends Dialect {
 	@Override
 	public String currentTimestampWithTimeZone() {
 		return getVersion().isBefore( 9 ) ? currentTimestamp() : "current_timestamp";
+	}
+
+	@Override
+	public boolean supportsInsertReturningGeneratedKeys() {
+		return getVersion().isSameOrAfter( 12 );
 	}
 
 
@@ -443,6 +464,8 @@ public class OracleLegacyDialect extends Dialect {
 				return "to_number(to_char(?2,'MI'))";
 			case SECOND:
 				return "to_number(to_char(?2,'SS'))";
+			case EPOCH:
+				return "trunc((cast(?2 at time zone 'UTC' as date) - date '1970-1-1')*86400)";
 			default:
 				return super.extractPattern(unit);
 		}
@@ -450,150 +473,119 @@ public class OracleLegacyDialect extends Dialect {
 
 	@Override
 	public String timestampaddPattern(TemporalUnit unit, TemporalType temporalType, IntervalType intervalType) {
+
 		StringBuilder pattern = new StringBuilder();
-		pattern.append("(?3+");
 		switch ( unit ) {
 			case YEAR:
+				pattern.append( ADD_YEAR_EXPRESSION );
+				break;
 			case QUARTER:
+				pattern.append( ADD_QUARTER_EXPRESSION );
+				break;
 			case MONTH:
-				pattern.append("numtoyminterval");
+				pattern.append( ADD_MONTH_EXPRESSION );
 				break;
 			case WEEK:
+				pattern.append("(?3+numtodsinterval((?2)*7,'day'))");
+				break;
 			case DAY:
 			case HOUR:
 			case MINUTE:
 			case SECOND:
+				pattern.append("(?3+numtodsinterval(?2,'?1'))");
+				break;
 			case NANOSECOND:
+				pattern.append("(?3+numtodsinterval((?2)/1e9,'second'))");
+				break;
 			case NATIVE:
-				pattern.append("numtodsinterval");
+				pattern.append("(?3+numtodsinterval(?2,'second'))");
 				break;
 			default:
 				throw new SemanticException(unit + " is not a legal field");
 		}
-		pattern.append("(");
-		switch ( unit ) {
-			case NANOSECOND:
-			case QUARTER:
-			case WEEK:
-				pattern.append("(");
-				break;
-		}
-		pattern.append("?2");
-		switch ( unit ) {
-			case QUARTER:
-				pattern.append(")*3");
-				break;
-			case WEEK:
-				pattern.append(")*7");
-				break;
-			case NANOSECOND:
-				pattern.append(")/1e9");
-				break;
-		}
-		pattern.append(",'");
-		switch ( unit ) {
-			case QUARTER:
-				pattern.append("month");
-				break;
-			case WEEK:
-				pattern.append("day");
-				break;
-			case NANOSECOND:
-			case NATIVE:
-				pattern.append("second");
-				break;
-			default:
-				pattern.append("?1");
-		}
-		pattern.append("')");
-		pattern.append(")");
 		return pattern.toString();
 	}
 
 	@Override
-	public String timestampdiffPattern(
-			TemporalUnit unit,
-			TemporalType fromTemporalType, TemporalType toTemporalType) {
-		StringBuilder pattern = new StringBuilder();
-		boolean timestamp = toTemporalType == TemporalType.TIMESTAMP || fromTemporalType == TemporalType.TIMESTAMP;
-		switch (unit) {
+	public String timestampdiffPattern(TemporalUnit unit, TemporalType fromTemporalType, TemporalType toTemporalType) {
+		final StringBuilder pattern = new StringBuilder();
+		final boolean hasTimePart = toTemporalType != TemporalType.DATE || fromTemporalType != TemporalType.DATE;
+		switch ( unit ) {
 			case YEAR:
-				extractField(pattern, YEAR, unit);
+				extractField( pattern, YEAR, unit );
 				break;
 			case QUARTER:
 			case MONTH:
-				pattern.append("(");
-				extractField(pattern, YEAR, unit);
-				pattern.append("+");
-				extractField(pattern, MONTH, unit);
-				pattern.append(")");
+				pattern.append( "(" );
+				extractField( pattern, YEAR, unit );
+				pattern.append( "+" );
+				extractField( pattern, MONTH, unit );
+				pattern.append( ")" );
 				break;
 			case WEEK:
 			case DAY:
-				extractField(pattern, DAY, unit);
+				extractField( pattern, DAY, unit );
 				break;
 			case HOUR:
-				pattern.append("(");
-				extractField(pattern, DAY, unit);
-				if (timestamp) {
-					pattern.append("+");
-					extractField(pattern, HOUR, unit);
+				pattern.append( "(" );
+				extractField( pattern, DAY, unit );
+				if ( hasTimePart ) {
+					pattern.append( "+" );
+					extractField( pattern, HOUR, unit );
 				}
-				pattern.append(")");
+				pattern.append( ")" );
 				break;
 			case MINUTE:
-				pattern.append("(");
-				extractField(pattern, DAY, unit);
-				if (timestamp) {
-					pattern.append("+");
-					extractField(pattern, HOUR, unit);
-					pattern.append("+");
-					extractField(pattern, MINUTE, unit);
+				pattern.append( "(" );
+				extractField( pattern, DAY, unit );
+				if ( hasTimePart ) {
+					pattern.append( "+" );
+					extractField( pattern, HOUR, unit );
+					pattern.append( "+" );
+					extractField( pattern, MINUTE, unit );
 				}
-				pattern.append(")");
+				pattern.append( ")" );
 				break;
 			case NATIVE:
 			case NANOSECOND:
 			case SECOND:
-				pattern.append("(");
-				extractField(pattern, DAY, unit);
-				if (timestamp) {
-					pattern.append("+");
-					extractField(pattern, HOUR, unit);
-					pattern.append("+");
-					extractField(pattern, MINUTE, unit);
-					pattern.append("+");
-					extractField(pattern, SECOND, unit);
+				pattern.append( "(" );
+				extractField( pattern, DAY, unit );
+				if ( hasTimePart ) {
+					pattern.append( "+" );
+					extractField( pattern, HOUR, unit );
+					pattern.append( "+" );
+					extractField( pattern, MINUTE, unit );
+					pattern.append( "+" );
+					extractField( pattern, SECOND, unit );
 				}
-				pattern.append(")");
+				pattern.append( ")" );
 				break;
 			default:
-				throw new SemanticException("unrecognized field: " + unit);
+				throw new SemanticException( "unrecognized field: " + unit );
 		}
 		return pattern.toString();
 	}
 
-	private void extractField(
-			StringBuilder pattern,
-			TemporalUnit unit, TemporalUnit toUnit) {
-		pattern.append("extract(");
-		pattern.append( translateExtractField(unit) );
-		pattern.append(" from (?3-?2) ");
-		switch (unit) {
+	private void extractField(StringBuilder pattern, TemporalUnit unit, TemporalUnit toUnit) {
+		pattern.append( "extract(" );
+		pattern.append( translateExtractField( unit ) );
+		pattern.append( " from (?3-?2) " );
+		switch ( unit ) {
 			case YEAR:
 			case MONTH:
-				pattern.append("year to month");
+				pattern.append( "year to month" );
 				break;
 			case DAY:
 			case HOUR:
 			case MINUTE:
 			case SECOND:
-				pattern.append("day to second");
+				pattern.append( "day to second" );
 				break;
 			default:
-				throw new SemanticException(unit + " is not a legal field");
+				throw new SemanticException( unit + " is not a legal field" );
 		}
-		pattern.append(")");
+		pattern.append( ")" );
 		pattern.append( unit.conversionFactor( toUnit, this ) );
 	}
 
@@ -622,8 +614,9 @@ public class OracleLegacyDialect extends Dialect {
 				return "number($p,$s)";
 
 			case DATE:
-			case TIME:
 				return "date";
+			case TIME:
+				return getVersion().isBefore( 9 ) ? "date" : super.columnType( sqlTypeCode );
 			case TIMESTAMP:
 				// the only difference between date and timestamp
 				// on Oracle is that date has no fractional seconds
@@ -772,7 +765,12 @@ public class OracleLegacyDialect extends Dialect {
 
 		typeContributions.contributeJdbcType( OracleBooleanJdbcType.INSTANCE );
 		typeContributions.contributeJdbcType( OracleXmlJdbcType.INSTANCE );
-		typeContributions.contributeJdbcType( OracleStructJdbcType.INSTANCE );
+		if ( OracleJdbcHelper.isUsable( serviceRegistry ) ) {
+			typeContributions.contributeJdbcType( OracleJdbcHelper.getStructJdbcType( serviceRegistry ) );
+		}
+		else {
+			typeContributions.contributeJdbcType( OracleReflectionStructJdbcType.INSTANCE );
+		}
 
 		if ( getVersion().isSameOrAfter( 12 ) ) {
 			// account for Oracle's deprecated support for LONGVARBINARY
@@ -797,7 +795,12 @@ public class OracleLegacyDialect extends Dialect {
 			}
 		}
 
-		typeContributions.contributeJdbcType( OracleArrayJdbcType.INSTANCE );
+		if ( OracleJdbcHelper.isUsable( serviceRegistry ) ) {
+			typeContributions.contributeJdbcType( OracleJdbcHelper.getArrayJdbcType( serviceRegistry ) );
+		}
+		else {
+			typeContributions.contributeJdbcType( OracleReflectionStructJdbcType.INSTANCE );
+		}
 		// Oracle requires a custom binder for binding untyped nulls with the NULL type
 		typeContributions.contributeJdbcType( NullJdbcType.INSTANCE );
 		typeContributions.contributeJdbcType( ObjectNullAsNullTypeJdbcType.INSTANCE );
@@ -979,7 +982,7 @@ public class OracleLegacyDialect extends Dialect {
 	@Override
 	public int registerResultSetOutParameter(CallableStatement statement, int col) throws SQLException {
 		//	register the type of the out param - an Oracle specific type
-		statement.registerOutParameter( col, OracleTypesHelper.INSTANCE.getOracleCursorTypeSqlType() );
+		statement.registerOutParameter( col, OracleTypes.CURSOR );
 		col++;
 		return col;
 	}
@@ -1092,24 +1095,15 @@ public class OracleLegacyDialect extends Dialect {
 
 	@Override
 	public String getQueryHintString(String sql, String hints) {
-		String statementType = statementType(sql);
-
-		final int pos = sql.indexOf( statementType );
-		if ( pos > -1 ) {
-			final StringBuilder buffer = new StringBuilder( sql.length() + hints.length() + 8 );
-			if ( pos > 0 ) {
-				buffer.append( sql, 0, pos );
-			}
-			buffer
-			.append( statementType )
-			.append( " /*+ " )
-			.append( hints )
-			.append( " */" )
-			.append( sql.substring( pos + statementType.length() ) );
-			sql = buffer.toString();
+		final String statementType = statementType( sql );
+		final int start = sql.indexOf( statementType );
+		if ( start < 0 ) {
+			return sql;
 		}
-
-		return sql;
+		else {
+			int end = start + statementType.length();
+			return sql.substring( 0, end ) + " /*+ " + hints + " */" + sql.substring( end );
+		}
 	}
 
 	@Override
@@ -1146,14 +1140,15 @@ public class OracleLegacyDialect extends Dialect {
 		return true;
 	}
 
-	private String statementType(String sql) {
-		Matcher matcher = SQL_STATEMENT_TYPE_PATTERN.matcher( sql );
 
+	private String statementType(String sql) {
+		final Matcher matcher = SQL_STATEMENT_TYPE_PATTERN.matcher( sql );
 		if ( matcher.matches() && matcher.groupCount() == 1 ) {
 			return matcher.group(1);
 		}
-
-		throw new IllegalArgumentException( "Can't determine SQL statement type for statement: " + sql );
+		else {
+			throw new IllegalArgumentException( "Can't determine SQL statement type for statement: " + sql );
+		}
 	}
 
 	@Override
@@ -1262,6 +1257,32 @@ public class OracleLegacyDialect extends Dialect {
 	}
 
 	@Override
+	public boolean supportsTemporalLiteralOffset() {
+		// Oracle *does* support offsets, but only
+		// in the ANSI syntax, not in the JDBC
+		// escape-based syntax, which we use in
+		// almost all circumstances (see below)
+		return false;
+	}
+
+	@Override
+	public void appendDateTimeLiteral(SqlAppender appender, TemporalAccessor temporalAccessor, TemporalType precision, TimeZone jdbcTimeZone) {
+		// we usually use the JDBC escape-based syntax
+		// because we want to let the JDBC driver handle
+		// TIME (a concept which does not exist in Oracle)
+		// but for the special case of timestamps with an
+		// offset we need to use the ANSI syntax
+		if ( precision == TemporalType.TIMESTAMP && temporalAccessor.isSupported( ChronoField.OFFSET_SECONDS ) ) {
+			appender.appendSql( "timestamp '" );
+			appendAsTimestampWithNanos( appender, temporalAccessor, true, jdbcTimeZone, false );
+			appender.appendSql( '\'' );
+		}
+		else {
+			super.appendDateTimeLiteral( appender, temporalAccessor, precision, jdbcTimeZone );
+		}
+	}
+
+	@Override
 	public void appendDatetimeFormat(SqlAppender appender, String format) {
 		// Unlike other databases, Oracle requires an explicit reset for the fm modifier,
 		// otherwise all following pattern variables trim zeros
@@ -1366,7 +1387,7 @@ public class OracleLegacyDialect extends Dialect {
 
 	@Override
 	public int registerResultSetOutParameter(CallableStatement statement, String name) throws SQLException {
-		statement.registerOutParameter( name, OracleTypesHelper.INSTANCE.getOracleCursorTypeSqlType() );
+		statement.registerOutParameter( name, OracleTypes.CURSOR );
 		return 1;
 	}
 
@@ -1416,5 +1437,10 @@ public class OracleLegacyDialect extends Dialect {
 	@Override
 	public String getCreateUserDefinedTypeKindString() {
 		return "object";
+	}
+
+	@Override
+	public String rowId(String rowId) {
+		return "rowid";
 	}
 }

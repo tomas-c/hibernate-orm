@@ -13,8 +13,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -49,7 +49,6 @@ import org.hibernate.mapping.Collection;
 import org.hibernate.mapping.Column;
 import org.hibernate.mapping.Component;
 import org.hibernate.mapping.Join;
-import org.hibernate.mapping.JoinedSubclass;
 import org.hibernate.mapping.MappedSuperclass;
 import org.hibernate.mapping.PersistentClass;
 import org.hibernate.mapping.Property;
@@ -437,7 +436,7 @@ public class BinderHelper {
 			final String name = collector.getPhysicalColumnName( referencedTable, joinColumn.getReferencedColumn() );
 			final Column column = new Column( name );
 			orderedColumns.add( column );
-			columnsToProperty.put( column, new HashSet<>() );
+			columnsToProperty.put( column, new LinkedHashSet<>() ); //need to use a LinkedHashSet here to make it deterministic
 		}
 
 		// Now, for each column find the properties of the target entity
@@ -520,7 +519,6 @@ public class BinderHelper {
 				}
 				else {
 					// we have the first column of a new property
-					orderedProperties.add( property );
 					if ( property.getColumnSpan() > 1 ) {
 						if ( !property.getColumns().get(0).equals( column ) ) {
 							// the columns have to occur in the right order in the property
@@ -531,6 +529,7 @@ public class BinderHelper {
 						currentProperty = property;
 						lastPropertyColumnIndex = 1;
 					}
+					orderedProperties.add( property );
 				}
 				break; // we're only considering the first matching property for now
 			}
@@ -878,7 +877,7 @@ public class BinderHelper {
 			return metadataCollector.getPropertyAnnotatedWithMapsId( mappedClass, isId ? "" : propertyName );
 		}
 	}
-	
+
 	public static Map<String,String> toAliasTableMap(SqlFragmentAlias[] aliases){
 		final Map<String,String> ret = new HashMap<>();
 		for ( SqlFragmentAlias alias : aliases ) {
@@ -888,7 +887,7 @@ public class BinderHelper {
 		}
 		return ret;
 	}
-	
+
 	public static Map<String,String> toAliasEntityMap(SqlFragmentAlias[] aliases){
 		final Map<String,String> result = new HashMap<>();
 		for ( SqlFragmentAlias alias : aliases ) {
@@ -1071,5 +1070,64 @@ public class BinderHelper {
 
 	public static boolean isDefault(XClass clazz, MetadataBuildingContext context) {
 		return context.getBootstrapContext().getReflectionManager().equals( clazz, void.class );
+	}
+
+	public static void checkMappedByType(
+			String mappedBy,
+			Value targetValue,
+			String propertyName,
+			PropertyHolder propertyHolder,
+			Map<String, PersistentClass> persistentClasses) {
+		final ToOne toOne;
+		if ( targetValue instanceof Collection ) {
+			toOne = (ToOne) ( (Collection) targetValue ).getElement();
+		}
+		else {
+			toOne = (ToOne) targetValue;
+		}
+		final String referencedEntityName = toOne.getReferencedEntityName();
+		final PersistentClass referencedClass = persistentClasses.get( referencedEntityName );
+		PersistentClass ownerClass = propertyHolder.getPersistentClass();
+		while ( ownerClass != null ) {
+			if ( checkReferencedClass( ownerClass, referencedClass ) ) {
+				return;
+			}
+			else {
+				ownerClass = getSuperPersistentClass( ownerClass );
+			}
+		}
+		throw new AnnotationException(
+				"Association '" + qualify( propertyHolder.getPath(), propertyName )
+						+ "' is 'mappedBy' a property named '" + mappedBy
+						+ "' which references the wrong entity type '" + referencedEntityName
+						+ "', expected '" + propertyHolder.getEntityName() + "'"
+		);
+	}
+
+	private static boolean checkReferencedClass(PersistentClass ownerClass, PersistentClass referencedClass) {
+		while ( referencedClass != null ) {
+			// Allow different entity types as long as they map to the same table
+			if ( ownerClass.getTable() == referencedClass.getTable() ) {
+				return true;
+			}
+			referencedClass = getSuperPersistentClass( referencedClass );
+		}
+		return false;
+	}
+
+	private static PersistentClass getSuperPersistentClass(PersistentClass persistentClass) {
+		return persistentClass.getSuperclass() != null ? persistentClass.getSuperclass()
+				: getSuperPersistentClass( persistentClass.getSuperMappedSuperclass() );
+	}
+
+	private static PersistentClass getSuperPersistentClass(MappedSuperclass mappedSuperclass) {
+		if ( mappedSuperclass != null ) {
+			final PersistentClass superClass = mappedSuperclass.getSuperPersistentClass();
+			if ( superClass != null ) {
+				return superClass;
+			}
+			return getSuperPersistentClass( mappedSuperclass.getSuperMappedSuperclass() );
+		}
+		return null;
 	}
 }

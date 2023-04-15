@@ -34,11 +34,8 @@ import org.hibernate.query.sqm.sql.SqmToSqlAstConverter;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.ast.Clause;
 import org.hibernate.sql.ast.SqlAstJoinType;
-import org.hibernate.sql.ast.spi.FromClauseAccess;
-import org.hibernate.sql.ast.spi.SqlAliasBaseGenerator;
-import org.hibernate.sql.ast.spi.SqlAstCreationContext;
+import org.hibernate.sql.ast.spi.SqlAliasBase;
 import org.hibernate.sql.ast.spi.SqlAstCreationState;
-import org.hibernate.sql.ast.spi.SqlExpressionResolver;
 import org.hibernate.sql.ast.spi.SqlSelection;
 import org.hibernate.sql.ast.tree.expression.ColumnReference;
 import org.hibernate.sql.ast.tree.expression.Expression;
@@ -55,10 +52,10 @@ import org.hibernate.sql.results.graph.Fetch;
 import org.hibernate.sql.results.graph.FetchParent;
 import org.hibernate.sql.results.graph.Fetchable;
 import org.hibernate.sql.results.graph.embeddable.EmbeddableValuedFetchable;
+import org.hibernate.sql.results.graph.embeddable.internal.AggregateEmbeddableFetchImpl;
 import org.hibernate.sql.results.graph.embeddable.internal.AggregateEmbeddableResultImpl;
 import org.hibernate.sql.results.graph.embeddable.internal.EmbeddableFetchImpl;
 import org.hibernate.sql.results.graph.embeddable.internal.EmbeddableResultImpl;
-import org.hibernate.sql.results.graph.embeddable.internal.AggregateEmbeddableFetchImpl;
 
 /**
  * @author Steve Ebersole
@@ -188,41 +185,6 @@ public class EmbeddedAttributeMapping
 	}
 
 	@Override
-	public int compare(Object value1, Object value2) {
-		return super.compare( value1, value2 );
-	}
-
-	@Override
-	public int forEachSelectable(int offset, SelectableConsumer consumer) {
-		return getEmbeddableTypeDescriptor().forEachSelectable( offset, consumer );
-	}
-
-	@Override
-	public void forEachInsertable(SelectableConsumer consumer) {
-		getEmbeddableTypeDescriptor().forEachInsertable( 0, consumer );
-	}
-
-	@Override
-	public void forEachUpdatable(SelectableConsumer consumer) {
-		getEmbeddableTypeDescriptor().forEachUpdatable( 0, consumer );
-	}
-
-	@Override
-	public void breakDownJdbcValues(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		getEmbeddableTypeDescriptor().breakDownJdbcValues( domainValue, valueConsumer, session );
-	}
-
-	@Override
-	public void decompose(Object domainValue, JdbcValueConsumer valueConsumer, SharedSessionContractImplementor session) {
-		getEmbeddableTypeDescriptor().decompose( domainValue, valueConsumer, session );
-	}
-
-	@Override
-	public boolean hasPartitionedSelectionMapping() {
-		return getEmbeddableTypeDescriptor().hasPartitionedSelectionMapping();
-	}
-
-	@Override
 	public <T> DomainResult<T> createDomainResult(
 			NavigablePath navigablePath,
 			TableGroup tableGroup,
@@ -335,43 +297,25 @@ public class EmbeddedAttributeMapping
 	}
 
 	@Override
-	public ModelPart findSubPart(
-			String name,
-			EntityMappingType treatTargetType) {
-		return getMappedType().findSubPart( name, treatTargetType );
-	}
-
-	@Override
-	public void visitSubParts(
-			Consumer<ModelPart> consumer,
-			EntityMappingType treatTargetType) {
-		getMappedType().visitSubParts( consumer, treatTargetType );
-	}
-
-	@Override
 	public TableGroupJoin createTableGroupJoin(
 			NavigablePath navigablePath,
 			TableGroup lhs,
 			String explicitSourceAlias,
+			SqlAliasBase explicitSqlAliasBase,
 			SqlAstJoinType requestedJoinType,
 			boolean fetched,
 			boolean addsPredicate,
-			SqlAliasBaseGenerator aliasBaseGenerator,
-			SqlExpressionResolver sqlExpressionResolver,
-			FromClauseAccess fromClauseAccess,
-			SqlAstCreationContext creationContext) {
+			SqlAstCreationState creationState) {
 		final SqlAstJoinType joinType = requestedJoinType == null ? SqlAstJoinType.INNER : requestedJoinType;
 		final TableGroup tableGroup = createRootTableGroupJoin(
 				navigablePath,
 				lhs,
 				explicitSourceAlias,
+				explicitSqlAliasBase,
 				requestedJoinType,
 				fetched,
 				null,
-				aliasBaseGenerator,
-				sqlExpressionResolver,
-				fromClauseAccess,
-				creationContext
+				creationState
 		);
 
 		return new TableGroupJoin( navigablePath, joinType, tableGroup );
@@ -382,39 +326,17 @@ public class EmbeddedAttributeMapping
 			NavigablePath navigablePath,
 			TableGroup lhs,
 			String explicitSourceAlias,
-			SqlAstJoinType requestedJoinType,
+			SqlAliasBase explicitSqlAliasBase,
+			SqlAstJoinType sqlAstJoinType,
 			boolean fetched,
 			Consumer<Predicate> predicateConsumer,
-			SqlAliasBaseGenerator aliasBaseGenerator,
-			SqlExpressionResolver sqlExpressionResolver,
-			FromClauseAccess fromClauseAccess,
-			SqlAstCreationContext creationContext) {
-		return new StandardVirtualTableGroup(
-				navigablePath,
-				this,
-				lhs,
-				fetched
-		);
+			SqlAstCreationState creationState) {
+		return new StandardVirtualTableGroup( navigablePath, this, lhs, fetched );
 	}
 
 	@Override
 	public String getSqlAliasStem() {
 		return getAttributeName();
-	}
-
-	@Override
-	public int getNumberOfFetchables() {
-		return getEmbeddableTypeDescriptor().getNumberOfAttributeMappings();
-	}
-
-	@Override
-	public Fetchable getFetchable(int position) {
-		return getEmbeddableTypeDescriptor().getFetchable( position );
-	}
-
-	@Override
-	public int getSelectableIndex(String selectableName) {
-		return getEmbeddableTypeDescriptor().getSelectableIndex( selectableName );
 	}
 
 	@Override

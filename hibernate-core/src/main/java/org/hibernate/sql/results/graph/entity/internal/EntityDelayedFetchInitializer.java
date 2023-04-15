@@ -17,7 +17,6 @@ import org.hibernate.internal.log.LoggingHelper;
 import org.hibernate.metamodel.mapping.ModelPart;
 import org.hibernate.metamodel.mapping.internal.ToOneAttributeMapping;
 import org.hibernate.persister.entity.EntityPersister;
-import org.hibernate.persister.entity.UniqueKeyLoadable;
 import org.hibernate.proxy.HibernateProxy;
 import org.hibernate.proxy.LazyInitializer;
 import org.hibernate.spi.NavigablePath;
@@ -147,7 +146,7 @@ public class EntityDelayedFetchInitializer extends AbstractFetchParentAccess imp
 									&& isEnhancedForLazyLoading( parentEntityInitializer ) ) {
 								return;
 							}
-							entityInstance = ( (UniqueKeyLoadable) concreteDescriptor ).loadByUniqueKey(
+							entityInstance = concreteDescriptor.loadByUniqueKey(
 									uniqueKeyPropertyName,
 									identifier,
 									session
@@ -183,14 +182,14 @@ public class EntityDelayedFetchInitializer extends AbstractFetchParentAccess imp
 		}
 	}
 
-	private EntityInitializer getParentEntityInitializer(FetchParentAccess parentAccess) {
+	protected EntityInitializer getParentEntityInitializer(FetchParentAccess parentAccess) {
 		if ( parentAccess != null ) {
 			return parentAccess.findFirstEntityInitializer();
 		}
 		return null;
 	}
 
-	private static boolean isEnhancedForLazyLoading(EntityInitializer parentEntityIntialiazer) {
+	protected static boolean isEnhancedForLazyLoading(EntityInitializer parentEntityIntialiazer) {
 		return parentEntityIntialiazer != null && parentEntityIntialiazer.getEntityDescriptor()
 				.getBytecodeEnhancementMetadata()
 				.isEnhancedForLazyLoading();
@@ -217,6 +216,10 @@ public class EntityDelayedFetchInitializer extends AbstractFetchParentAccess imp
 	@Override
 	public Object getEntityInstance() {
 		return entityInstance;
+	}
+
+	protected void setEntityInstance(Object entityInstance) {
+		this.entityInstance = entityInstance;
 	}
 
 	@Override
@@ -259,4 +262,19 @@ public class EntityDelayedFetchInitializer extends AbstractFetchParentAccess imp
 		return "EntityDelayedFetchInitializer(" + LoggingHelper.toLoggableString( navigablePath ) + ")";
 	}
 
+	protected Object getIdentifier() {
+		return identifier;
+	}
+
+	protected void setIdentifier(Object identifier) {
+		this.identifier = identifier;
+	}
+
+	protected boolean isSelectByUniqueKey() {
+		return selectByUniqueKey;
+	}
+
+	protected DomainResultAssembler<?> getIdentifierAssembler() {
+		return identifierAssembler;
+	}
 }

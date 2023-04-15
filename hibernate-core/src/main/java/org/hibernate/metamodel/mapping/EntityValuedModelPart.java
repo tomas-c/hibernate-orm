@@ -9,6 +9,7 @@ package org.hibernate.metamodel.mapping;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
+import org.hibernate.cache.MutableCacheKeyBuilder;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 import org.hibernate.internal.util.IndexedConsumer;
 import org.hibernate.spi.NavigablePath;
@@ -101,20 +102,29 @@ public interface EntityValuedModelPart extends FetchableContainer {
 	}
 
 	@Override
-	default int forEachDisassembledJdbcValue(
-			Object value,
-			int offset,
-			JdbcValuesConsumer valuesConsumer,
-			SharedSessionContractImplementor session) {
-		return getEntityMappingType().forEachDisassembledJdbcValue( value, offset, valuesConsumer, session );
+	default void addToCacheKey(MutableCacheKeyBuilder cacheKey, Object value, SharedSessionContractImplementor session){
+		getEntityMappingType().addToCacheKey( cacheKey, value, session );
 	}
 
 	@Override
-	default int forEachJdbcValue(
+	default <X, Y> int forEachDisassembledJdbcValue(
 			Object value,
 			int offset,
-			JdbcValuesConsumer consumer,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> valuesConsumer,
 			SharedSessionContractImplementor session) {
-		return getEntityMappingType().forEachJdbcValue( value, offset, consumer, session );
+		return getEntityMappingType().forEachDisassembledJdbcValue( value, offset, x, y, valuesConsumer, session );
+	}
+
+	@Override
+	default <X, Y> int forEachJdbcValue(
+			Object value,
+			int offset,
+			X x,
+			Y y,
+			JdbcValuesBiConsumer<X, Y> consumer,
+			SharedSessionContractImplementor session) {
+		return getEntityMappingType().forEachJdbcValue( value, offset, x, y, consumer, session );
 	}
 }

@@ -11,9 +11,9 @@ import java.util.Map;
 
 import org.hibernate.engine.FetchTiming;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.metamodel.mapping.DiscriminatorType;
 import org.hibernate.metamodel.mapping.JdbcMapping;
 import org.hibernate.metamodel.mapping.JdbcMappingContainer;
-import org.hibernate.persister.entity.DiscriminatorType;
 import org.hibernate.persister.entity.JoinedSubclassEntityPersister;
 import org.hibernate.spi.NavigablePath;
 import org.hibernate.sql.ast.SqlAstTranslator;
@@ -32,6 +32,7 @@ import org.hibernate.sql.ast.tree.predicate.Predicate;
 import org.hibernate.sql.results.graph.DomainResultCreationState;
 import org.hibernate.sql.results.graph.FetchParent;
 import org.hibernate.sql.results.graph.basic.BasicFetch;
+import org.hibernate.type.BasicType;
 
 import static org.hibernate.sql.ast.spi.SqlExpressionResolver.createColumnReferenceKey;
 
@@ -49,16 +50,14 @@ public class CaseStatementDiscriminatorMappingImpl extends AbstractDiscriminator
 			String[] notNullColumnNames,
 			String[] discriminatorValues,
 			boolean[] discriminatorAbstract,
-			Map<String,String> subEntityNameByTableName,
 			DiscriminatorType<?> incomingDiscriminatorType,
-			Map<Object, DiscriminatorValueDetails> valueMappings,
 			MappingModelCreationProcess creationProcess) {
-		super( entityDescriptor, incomingDiscriminatorType, valueMappings, creationProcess );
+		//noinspection unchecked
+		super( entityDescriptor, (DiscriminatorType<Object>) incomingDiscriminatorType, (BasicType<Object>) incomingDiscriminatorType.getUnderlyingJdbcMapping() );
 
 		for ( int i = 0; i < discriminatorValues.length; i++ ) {
 			if ( !discriminatorAbstract[i] ) {
 				final String tableName = tableNames[notNullColumnTableNumbers[i]];
-				final String subEntityName = subEntityNameByTableName.get( tableName );
 				final String oneSubEntityColumn = notNullColumnNames[i];
 				final String discriminatorValue = discriminatorValues[i];
 				tableDiscriminatorDetailsMap.put(
@@ -66,9 +65,7 @@ public class CaseStatementDiscriminatorMappingImpl extends AbstractDiscriminator
 						new TableDiscriminatorDetails(
 								tableName,
 								oneSubEntityColumn,
-								getUnderlyingJdbcMappingType().getJavaTypeDescriptor()
-										.wrap( discriminatorValue, null ),
-								subEntityName
+								getUnderlyingJdbcMapping().getJavaTypeDescriptor().wrap( discriminatorValue, null )
 						)
 				);
 			}
@@ -119,60 +116,7 @@ public class CaseStatementDiscriminatorMappingImpl extends AbstractDiscriminator
 	}
 
 	private Expression createCaseSearchedExpression(TableGroup entityTableGroup) {
-		return new SelfRenderingExpression() {
-			CaseSearchedExpression caseSearchedExpression;
-
-			@Override
-			public void renderToSql(
-					SqlAppender sqlAppender,
-					SqlAstTranslator<?> walker,
-					SessionFactoryImplementor sessionFactory) {
-				if ( caseSearchedExpression == null ) {
-					// todo (6.0): possible optimization is to omit cases for table reference joins, that touch a super class, where a subclass is inner joined due to pruning
-					caseSearchedExpression = new CaseSearchedExpression( CaseStatementDiscriminatorMappingImpl.this );
-					tableDiscriminatorDetailsMap.forEach(
-							(tableName, tableDiscriminatorDetails) -> {
-								final TableReference tableReference = entityTableGroup.getTableReference(
-										entityTableGroup.getNavigablePath(),
-										tableName,
-										false,
-										false
-								);
-
-								if ( tableReference == null ) {
-									// assume this is because it is a table that is not part of the processing entity's sub-hierarchy
-									return;
-								}
-
-								final Predicate predicate = new NullnessPredicate(
-										new ColumnReference(
-												tableReference,
-												tableDiscriminatorDetails.getCheckColumnName(),
-												false,
-												null,
-												getJdbcMapping()
-										),
-										true
-								);
-
-								caseSearchedExpression.when(
-										predicate,
-										new QueryLiteral<>(
-												tableDiscriminatorDetails.getDiscriminatorValue(),
-												getUnderlyingJdbcMappingType()
-										)
-								);
-							}
-					);
-				}
-				caseSearchedExpression.accept( walker );
-			}
-
-			@Override
-			public JdbcMappingContainer getExpressionType() {
-				return CaseStatementDiscriminatorMappingImpl.this;
-			}
-		};
+		return new CaseStatementDiscriminatorExpression( entityTableGroup );
 	}
 
 	@Override
@@ -255,30 +199,87 @@ public class CaseStatementDiscriminatorMappingImpl extends AbstractDiscriminator
 		private final String tableName;
 		private final String checkColumnName;
 		private final Object discriminatorValue;
-		private final String subclassEntityName;
 
-		public TableDiscriminatorDetails(String tableName, String checkColumnName, Object discriminatorValue, String subclassEntityName) {
+		public TableDiscriminatorDetails(
+				String tableName,
+				String checkColumnName,
+				Object discriminatorValue) {
 			this.tableName = tableName;
 			this.checkColumnName = checkColumnName;
 			this.discriminatorValue = discriminatorValue;
-			this.subclassEntityName = subclassEntityName;
-		}
-
-		String getTableExpression() {
-			return tableName;
 		}
 
 		Object getDiscriminatorValue() {
 			return discriminatorValue;
 		}
 
-		String getSubclassEntityName() {
-			return subclassEntityName;
-		}
-
 		String getCheckColumnName() {
 			return checkColumnName;
 		}
+
+		@Override
+		public String toString() {
+			return "TableDiscriminatorDetails(`" + tableName + "." + checkColumnName + "` = " + discriminatorValue + ")";
+		}
 	}
 
+	public final class CaseStatementDiscriminatorExpression implements SelfRenderingExpression {
+		private final TableGroup entityTableGroup;
+		CaseSearchedExpression caseSearchedExpression;
+
+		public CaseStatementDiscriminatorExpression(TableGroup entityTableGroup) {
+			this.entityTableGroup = entityTableGroup;
+		}
+
+		@Override
+		public void renderToSql(
+				SqlAppender sqlAppender,
+				SqlAstTranslator<?> walker,
+				SessionFactoryImplementor sessionFactory) {
+			if ( caseSearchedExpression == null ) {
+				// todo (6.0): possible optimization is to omit cases for table reference joins, that touch a super class, where a subclass is inner joined due to pruning
+				caseSearchedExpression = new CaseSearchedExpression( CaseStatementDiscriminatorMappingImpl.this );
+				tableDiscriminatorDetailsMap.forEach(
+						(tableName, tableDiscriminatorDetails) -> {
+							final TableReference tableReference = entityTableGroup.getTableReference(
+									entityTableGroup.getNavigablePath(),
+									tableName,
+									false,
+									false
+							);
+
+							if ( tableReference == null ) {
+								// assume this is because it is a table that is not part of the processing entity's sub-hierarchy
+								return;
+							}
+
+							final Predicate predicate = new NullnessPredicate(
+									new ColumnReference(
+											tableReference,
+											tableDiscriminatorDetails.getCheckColumnName(),
+											false,
+											null,
+											getJdbcMapping()
+									),
+									true
+							);
+
+							caseSearchedExpression.when(
+									predicate,
+									new QueryLiteral<>(
+											tableDiscriminatorDetails.getDiscriminatorValue(),
+											getUnderlyingJdbcMapping()
+									)
+							);
+						}
+				);
+			}
+			caseSearchedExpression.accept( walker );
+		}
+
+		@Override
+		public JdbcMappingContainer getExpressionType() {
+			return CaseStatementDiscriminatorMappingImpl.this;
+		}
+	}
 }

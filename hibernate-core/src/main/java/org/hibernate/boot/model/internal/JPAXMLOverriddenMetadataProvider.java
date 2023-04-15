@@ -54,8 +54,12 @@ public class JPAXMLOverriddenMetadataProvider implements MetadataProvider {
 	private Map<AnnotatedElement, AnnotationReader> cache;
 
 	public JPAXMLOverriddenMetadataProvider(BootstrapContext bootstrapContext) {
-		this.classLoaderAccess = bootstrapContext.getClassLoaderAccess();
-		this.xmlContext = new XMLContext( bootstrapContext );
+		this( bootstrapContext.getClassLoaderAccess(), bootstrapContext );
+	}
+
+	public JPAXMLOverriddenMetadataProvider(ClassLoaderAccess classLoaderAccess, BootstrapContext bootstrapContext) {
+		this.classLoaderAccess = classLoaderAccess;
+		this.xmlContext = new XMLContext( classLoaderAccess, bootstrapContext.getClassmateContext() );
 		this.xmlMappingEnabled = bootstrapContext.getMetadataBuildingOptions().isXmlMappingEnabled();
 	}
 
@@ -112,7 +116,7 @@ public class JPAXMLOverriddenMetadataProvider implements MetadataProvider {
 				}
 				defaults.put( EntityListeners.class, entityListeners );
 				for ( JaxbEntityMappings entityMappings : xmlContext.getAllDocuments() ) {
-					List<JaxbSequenceGenerator> jaxbSequenceGenerators = entityMappings.getSequenceGenerator();
+					List<JaxbSequenceGenerator> jaxbSequenceGenerators = entityMappings.getSequenceGenerators();
 					List<SequenceGenerator> sequenceGenerators = (List<SequenceGenerator>) defaults.get( SequenceGenerator.class );
 					if ( sequenceGenerators == null ) {
 						sequenceGenerators = new ArrayList<>();
@@ -122,7 +126,7 @@ public class JPAXMLOverriddenMetadataProvider implements MetadataProvider {
 						sequenceGenerators.add( JPAXMLOverriddenAnnotationReader.buildSequenceGeneratorAnnotation( element ) );
 					}
 
-					List<JaxbTableGenerator> jaxbTableGenerators = entityMappings.getTableGenerator();
+					List<JaxbTableGenerator> jaxbTableGenerators = entityMappings.getTableGenerators();
 					List<TableGenerator> tableGenerators = (List<TableGenerator>) defaults.get( TableGenerator.class );
 					if ( tableGenerators == null ) {
 						tableGenerators = new ArrayList<>();

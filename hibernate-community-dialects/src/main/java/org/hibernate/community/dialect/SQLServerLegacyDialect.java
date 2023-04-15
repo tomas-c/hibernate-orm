@@ -21,6 +21,7 @@ import org.hibernate.dialect.TimeZoneSupport;
 import org.hibernate.dialect.function.CommonFunctionFactory;
 import org.hibernate.dialect.function.CountFunction;
 import org.hibernate.dialect.function.SQLServerFormatEmulation;
+import org.hibernate.dialect.function.SqlServerConvertTruncFunction;
 import org.hibernate.dialect.identity.IdentityColumnSupport;
 import org.hibernate.dialect.identity.SQLServerIdentityColumnSupport;
 import org.hibernate.dialect.pagination.LimitHandler;
@@ -64,7 +65,8 @@ import org.hibernate.type.BasicTypeRegistry;
 import org.hibernate.type.StandardBasicTypes;
 import org.hibernate.type.descriptor.java.PrimitiveByteArrayJavaType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
-import org.hibernate.type.descriptor.jdbc.SmallIntJdbcType;
+import org.hibernate.type.descriptor.jdbc.TimestampUtcAsJdbcTimestampJdbcType;
+import org.hibernate.type.descriptor.jdbc.TinyIntAsSmallIntJdbcType;
 import org.hibernate.type.descriptor.jdbc.UUIDJdbcType;
 import org.hibernate.type.descriptor.jdbc.XmlJdbcType;
 import org.hibernate.type.descriptor.jdbc.spi.JdbcTypeRegistry;
@@ -168,6 +170,7 @@ public class SQLServerLegacyDialect extends AbstractTransactSQLDialect {
 					return getVersion().isSameOrAfter( 10 ) ? "time" : super.columnType( sqlTypeCode );
 				case TIMESTAMP:
 					return getVersion().isSameOrAfter( 10 ) ? "datetime2($p)" : super.columnType( sqlTypeCode );
+				case TIME_WITH_TIMEZONE:
 				case TIMESTAMP_WITH_TIMEZONE:
 					return getVersion().isSameOrAfter( 10 ) ? "datetimeoffset($p)" : super.columnType( sqlTypeCode );
 			}
@@ -265,9 +268,12 @@ public class SQLServerLegacyDialect extends AbstractTransactSQLDialect {
 	public void contributeTypes(TypeContributions typeContributions, ServiceRegistry serviceRegistry) {
 		super.contributeTypes( typeContributions, serviceRegistry );
 
+		// Need to bind as java.sql.Timestamp because reading OffsetDateTime from a "datetime2" column fails
+		typeContributions.contributeJdbcType( TimestampUtcAsJdbcTimestampJdbcType.INSTANCE );
+
 		typeContributions.getTypeConfiguration().getJdbcTypeRegistry().addDescriptor(
 				Types.TINYINT,
-				SmallIntJdbcType.INSTANCE
+				TinyIntAsSmallIntJdbcType.INSTANCE
 		);
 		typeContributions.contributeJdbcType( XmlJdbcType.INSTANCE );
 		typeContributions.contributeJdbcType( UUIDJdbcType.INSTANCE );
@@ -303,7 +309,6 @@ public class SQLServerLegacyDialect extends AbstractTransactSQLDialect {
 
 		functionFactory.log_log();
 
-		functionFactory.trunc_round();
 		functionFactory.round_round();
 		functionFactory.everyAny_minMaxIif();
 		functionFactory.octetLength_pattern( "datalength(?1)" );
@@ -366,6 +371,15 @@ public class SQLServerLegacyDialect extends AbstractTransactSQLDialect {
 		}
 		if ( getVersion().isSameOrAfter( 16 ) ) {
 			functionFactory.leastGreatest();
+			functionFactory.dateTrunc_datetrunc();
+			functionFactory.trunc_round_datetrunc();
+		}
+		else {
+			functionContributions.getFunctionRegistry().register(
+					"trunc",
+					new SqlServerConvertTruncFunction( functionContributions.getTypeConfiguration() )
+			);
+			functionContributions.getFunctionRegistry().registerAlternateKey( "truncate", "trunc" );
 		}
 	}
 
@@ -771,6 +785,8 @@ public class SQLServerLegacyDialect extends AbstractTransactSQLDialect {
 			case SECOND:
 				//this should evaluate to a floating point type
 				return "(datepart(second,?2)+datepart(nanosecond,?2)/1e9)";
+			case EPOCH:
+				return "datediff_big(second, '1970-01-01', ?2)";
 			case WEEK:
 				// Thanks https://www.sqlservercentral.com/articles/a-simple-formula-to-calculate-the-iso-week-number
 				if ( getVersion().isBefore( 10 ) ) {

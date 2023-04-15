@@ -24,7 +24,6 @@ import org.hibernate.internal.HEMLogging;
 import org.hibernate.internal.util.ReflectHelper;
 import org.hibernate.internal.util.collections.CollectionHelper;
 import org.hibernate.mapping.Component;
-import org.hibernate.mapping.KeyValue;
 import org.hibernate.mapping.MappedSuperclass;
 import org.hibernate.mapping.PersistentClass;
 import org.hibernate.mapping.Property;
@@ -274,6 +273,7 @@ public class MetadataContext {
 
 					applyIdMetadata( safeMapping, jpaMapping );
 					applyVersionAttribute( safeMapping, jpaMapping );
+					applyGenericProperties( safeMapping, jpaMapping );
 
 					for ( Property property : safeMapping.getDeclaredProperties() ) {
 						if ( property.getValue() == safeMapping.getIdentifierMapper() ) {
@@ -420,20 +420,25 @@ public class MetadataContext {
 	private void applyIdMetadata(PersistentClass persistentClass, IdentifiableDomainType<?> identifiableType) {
 		if ( persistentClass.hasIdentifierProperty() ) {
 			final Property declaredIdentifierProperty = persistentClass.getDeclaredIdentifierProperty();
+			//noinspection rawtypes
+			final AttributeContainer attributeContainer = (AttributeContainer) identifiableType;
 			if ( declaredIdentifierProperty != null ) {
 				final SingularPersistentAttribute<?, Object> idAttribute = attributeFactory.buildIdAttribute(
 						identifiableType,
 						declaredIdentifierProperty
 				);
-
-				//noinspection unchecked rawtypes
-				( ( AttributeContainer) identifiableType ).getInFlightAccess().applyIdAttribute( idAttribute );
+				//noinspection unchecked
+				attributeContainer.getInFlightAccess().applyIdAttribute( idAttribute );
 			}
-			else if ( persistentClass.getIdentifier() instanceof Component
-					&& persistentClass.getIdentifierProperty() != getSuperclassIdentifier( persistentClass ) ) {
-				// If the identifier is a generic component, we have to call buildIdAttribute anyway,
-				// as this will create and register the EmbeddableType for the subtype
-				attributeFactory.buildIdAttribute( identifiableType, persistentClass.getIdentifierProperty() );
+			final Property superclassIdentifier = getMappedSuperclassIdentifier( persistentClass );
+			if ( superclassIdentifier != null && superclassIdentifier.isGeneric() ) {
+				// If the superclass identifier is generic we have to build the attribute to register the concrete type
+				final SingularPersistentAttribute<?, Object> concreteIdentifier = attributeFactory.buildIdAttribute(
+						identifiableType,
+						persistentClass.getIdentifierProperty()
+				);
+				//noinspection unchecked
+				attributeContainer.getInFlightAccess().addConcreteGenericAttribute( concreteIdentifier );
 			}
 		}
 		else {
@@ -483,30 +488,14 @@ public class MetadataContext {
 		}
 	}
 
-	private Property getSuperclassIdentifier(PersistentClass persistentClass) {
-		final Property declaredIdentifierProperty = persistentClass.getDeclaredIdentifierProperty();
-		if ( declaredIdentifierProperty != null ) {
-			return declaredIdentifierProperty;
-		}
-		if ( persistentClass.getSuperMappedSuperclass() != null ) {
-			return getSuperclassIdentifier( persistentClass.getSuperMappedSuperclass() );
-		}
-		else if ( persistentClass.getSuperclass() != null ) {
-			return getSuperclassIdentifier( persistentClass.getSuperclass() );
-		}
-		return null;
-	}
-
-	private Property getSuperclassIdentifier(MappedSuperclass persistentClass) {
-		final Property declaredIdentifierProperty = persistentClass.getDeclaredIdentifierProperty();
-		if ( declaredIdentifierProperty != null ) {
-			return declaredIdentifierProperty;
-		}
-		if ( persistentClass.getSuperMappedSuperclass() != null ) {
-			return getSuperclassIdentifier( persistentClass.getSuperMappedSuperclass() );
-		}
-		else if ( persistentClass.getSuperPersistentClass() != null ) {
-			return getSuperclassIdentifier( persistentClass.getSuperPersistentClass() );
+	private Property getMappedSuperclassIdentifier(PersistentClass persistentClass) {
+		MappedSuperclass mappedSuperclass = getMappedSuperclass( persistentClass );
+		while ( mappedSuperclass != null ) {
+			final Property declaredIdentifierProperty = mappedSuperclass.getDeclaredIdentifierProperty();
+			if ( declaredIdentifierProperty != null ) {
+				return declaredIdentifierProperty;
+			}
+			mappedSuperclass = getMappedSuperclass( mappedSuperclass );
 		}
 		return null;
 	}
@@ -565,6 +554,38 @@ public class MetadataContext {
 					attributeFactory.buildVersionAttribute( jpaMappingType, declaredVersion )
 			);
 		}
+	}
+
+	private <X> void applyGenericProperties(PersistentClass persistentClass, EntityDomainType<X> entityType) {
+		MappedSuperclass mappedSuperclass = getMappedSuperclass( persistentClass );
+		while ( mappedSuperclass != null ) {
+			for ( Property superclassProperty : mappedSuperclass.getDeclaredProperties() ) {
+				if ( superclassProperty.isGeneric() ) {
+					final Property property = persistentClass.getProperty( superclassProperty.getName() );
+					final PersistentAttribute<X, ?> attribute = attributeFactory.buildAttribute( entityType, property );
+					//noinspection unchecked
+					( (AttributeContainer<X>) entityType ).getInFlightAccess().addConcreteGenericAttribute( attribute );
+				}
+			}
+			mappedSuperclass = getMappedSuperclass( mappedSuperclass );
+		}
+	}
+
+	private MappedSuperclass getMappedSuperclass(PersistentClass persistentClass) {
+		while ( persistentClass != null ) {
+			final MappedSuperclass mappedSuperclass = persistentClass.getSuperMappedSuperclass();
+			if ( mappedSuperclass != null ) {
+				return mappedSuperclass;
+			}
+			persistentClass = persistentClass.getSuperclass();
+		}
+		return null;
+	}
+
+	private MappedSuperclass getMappedSuperclass(MappedSuperclass mappedSuperclass) {
+		return mappedSuperclass.getSuperMappedSuperclass() != null
+				? mappedSuperclass.getSuperMappedSuperclass()
+				: getMappedSuperclass( mappedSuperclass.getSuperPersistentClass() );
 	}
 
 	private <X> Set<SingularPersistentAttribute<? super X, ?>> buildIdClassAttributes(

@@ -28,6 +28,7 @@ import org.hibernate.boot.model.relational.SqlStringGenerationContext;
 import org.hibernate.dialect.function.CommonFunctionFactory;
 import org.hibernate.dialect.function.CountFunction;
 import org.hibernate.dialect.function.SQLServerFormatEmulation;
+import org.hibernate.dialect.function.SqlServerConvertTruncFunction;
 import org.hibernate.dialect.identity.IdentityColumnSupport;
 import org.hibernate.dialect.identity.SQLServerIdentityColumnSupport;
 import org.hibernate.dialect.pagination.LimitHandler;
@@ -45,6 +46,7 @@ import org.hibernate.engine.jdbc.env.spi.IdentifierHelper;
 import org.hibernate.engine.jdbc.env.spi.IdentifierHelperBuilder;
 import org.hibernate.engine.jdbc.env.spi.NameQualifierSupport;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
+import org.hibernate.exception.ConstraintViolationException;
 import org.hibernate.exception.LockTimeoutException;
 import org.hibernate.exception.spi.SQLExceptionConversionDelegate;
 import org.hibernate.internal.util.JdbcExceptionHelper;
@@ -72,7 +74,8 @@ import org.hibernate.type.BasicTypeRegistry;
 import org.hibernate.type.StandardBasicTypes;
 import org.hibernate.type.descriptor.java.PrimitiveByteArrayJavaType;
 import org.hibernate.type.descriptor.jdbc.JdbcType;
-import org.hibernate.type.descriptor.jdbc.SmallIntJdbcType;
+import org.hibernate.type.descriptor.jdbc.TimestampUtcAsJdbcTimestampJdbcType;
+import org.hibernate.type.descriptor.jdbc.TinyIntAsSmallIntJdbcType;
 import org.hibernate.type.descriptor.jdbc.UUIDJdbcType;
 import org.hibernate.type.descriptor.jdbc.XmlJdbcType;
 import org.hibernate.type.descriptor.jdbc.spi.JdbcTypeRegistry;
@@ -99,6 +102,7 @@ import static org.hibernate.type.SqlTypes.SQLXML;
 import static org.hibernate.type.SqlTypes.TIME;
 import static org.hibernate.type.SqlTypes.TIMESTAMP;
 import static org.hibernate.type.SqlTypes.TIMESTAMP_WITH_TIMEZONE;
+import static org.hibernate.type.SqlTypes.TIME_WITH_TIMEZONE;
 import static org.hibernate.type.SqlTypes.UUID;
 import static org.hibernate.type.SqlTypes.VARBINARY;
 import static org.hibernate.type.SqlTypes.VARCHAR;
@@ -178,6 +182,7 @@ public class SQLServerDialect extends AbstractTransactSQLDialect {
 				return "time";
 			case TIMESTAMP:
 				return "datetime2($p)";
+			case TIME_WITH_TIMEZONE:
 			case TIMESTAMP_WITH_TIMEZONE:
 				return "datetimeoffset($p)";
 			default:
@@ -271,9 +276,12 @@ public class SQLServerDialect extends AbstractTransactSQLDialect {
 	public void contributeTypes(TypeContributions typeContributions, ServiceRegistry serviceRegistry) {
 		super.contributeTypes( typeContributions, serviceRegistry );
 
+		// Need to bind as java.sql.Timestamp because reading OffsetDateTime from a "datetime2" column fails
+		typeContributions.contributeJdbcType( TimestampUtcAsJdbcTimestampJdbcType.INSTANCE );
+
 		typeContributions.getTypeConfiguration().getJdbcTypeRegistry().addDescriptor(
 				Types.TINYINT,
-				SmallIntJdbcType.INSTANCE
+				TinyIntAsSmallIntJdbcType.INSTANCE
 		);
 		typeContributions.contributeJdbcType( XmlJdbcType.INSTANCE );
 		typeContributions.contributeJdbcType( UUIDJdbcType.INSTANCE );
@@ -309,7 +317,6 @@ public class SQLServerDialect extends AbstractTransactSQLDialect {
 
 		functionFactory.log_log();
 
-		functionFactory.trunc_round();
 		functionFactory.round_round();
 		functionFactory.everyAny_minMaxIif();
 		functionFactory.octetLength_pattern( "datalength(?1)" );
@@ -370,6 +377,15 @@ public class SQLServerDialect extends AbstractTransactSQLDialect {
 		}
 		if ( getVersion().isSameOrAfter( 16 ) ) {
 			functionFactory.leastGreatest();
+			functionFactory.dateTrunc_datetrunc();
+			functionFactory.trunc_round_datetrunc();
+		}
+		else {
+			functionContributions.getFunctionRegistry().register(
+					"trunc",
+					new SqlServerConvertTruncFunction( functionContributions.getTypeConfiguration() )
+			);
+			functionContributions.getFunctionRegistry().registerAlternateKey( "truncate", "trunc" );
 		}
 	}
 
@@ -698,14 +714,20 @@ public class SQLServerDialect extends AbstractTransactSQLDialect {
 	public SQLExceptionConversionDelegate buildSQLExceptionConversionDelegate() {
 		return (sqlException, message, sql) -> {
 			final String sqlState = JdbcExceptionHelper.extractSqlState( sqlException );
-			final int errorCode = JdbcExceptionHelper.extractErrorCode( sqlException );
 			if ( "HY008".equals( sqlState ) ) {
 				throw new QueryTimeoutException( message, sqlException, sql );
 			}
-			if ( 1222 == errorCode ) {
-				throw new LockTimeoutException( message, sqlException, sql );
+
+			final int errorCode = JdbcExceptionHelper.extractErrorCode( sqlException );
+			switch ( errorCode ) {
+				case 1222:
+					throw new LockTimeoutException( message, sqlException, sql );
+				case 2627:
+				case 2601:
+					throw new ConstraintViolationException( message, sqlException, sql );
+				default:
+					return null;
 			}
-			return null;
 		};
 	}
 
@@ -753,6 +775,8 @@ public class SQLServerDialect extends AbstractTransactSQLDialect {
 			case SECOND:
 				//this should evaluate to a floating point type
 				return "(datepart(second,?2)+datepart(nanosecond,?2)/1e9)";
+			case EPOCH:
+				return "datediff_big(second, '1970-01-01', ?2)";
 			default:
 				return "datepart(?1,?2)";
 		}

@@ -58,9 +58,9 @@ FLOATING_POINT_NUMBER
 	| DIGIT+
 	;
 
-INTEGER_LITERAL : INTEGER_NUMBER;
+INTEGER_LITERAL : INTEGER_NUMBER ('_' INTEGER_NUMBER)*;
 
-LONG_LITERAL : INTEGER_NUMBER LONG_SUFFIX;
+LONG_LITERAL : INTEGER_NUMBER  ('_' INTEGER_NUMBER)* LONG_SUFFIX;
 
 FLOAT_LITERAL : FLOATING_POINT_NUMBER FLOAT_SUFFIX?;
 
@@ -181,6 +181,7 @@ ELSE				: [eE] [lL] [sS] [eE];
 EMPTY				: [eE] [mM] [pP] [tT] [yY];
 END					: [eE] [nN] [dD];
 ENTRY				: [eE] [nN] [tT] [rR] [yY];
+EPOCH				: [eE] [pP] [oO] [cC] [hH];
 ERROR				: [eE] [rR] [rR] [oO] [rR];
 ESCAPE				: [eE] [sS] [cC] [aA] [pP] [eE];
 EVERY				: [eE] [vV] [eE] [rR] [yY];
@@ -289,6 +290,7 @@ TO					: [tT] [oO];
 TRAILING			: [tT] [rR] [aA] [iI] [lL] [iI] [nN] [gG];
 TREAT				: [tT] [rR] [eE] [aA] [tT];
 TRIM				: [tT] [rR] [iI] [mM];
+TRUNC				: [tT] [rR] [uU] [nN] [cC];
 TRUNCATE			: [tT] [rR] [uU] [nN] [cC] [aA] [tT] [eE];
 TYPE				: [tT] [yY] [pP] [eE];
 UNBOUNDED			: [uU] [nN] [bB] [oO] [uU] [nN] [dD] [eE] [dD];

@@ -12,6 +12,7 @@ import java.util.List;
 import org.hibernate.Internal;
 import org.hibernate.dialect.Dialect;
 import org.hibernate.engine.jdbc.batch.internal.BasicBatchKey;
+import org.hibernate.engine.jdbc.batch.spi.BatchKey;
 import org.hibernate.engine.jdbc.mutation.JdbcValueBindings;
 import org.hibernate.engine.jdbc.mutation.MutationExecutor;
 import org.hibernate.engine.jdbc.mutation.ParameterUsage;
@@ -19,12 +20,15 @@ import org.hibernate.engine.jdbc.mutation.TableInclusionChecker;
 import org.hibernate.engine.jdbc.mutation.spi.MutationExecutorService;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
+import org.hibernate.generator.BeforeExecutionGenerator;
+import org.hibernate.generator.Generator;
+import org.hibernate.generator.OnExecutionGenerator;
 import org.hibernate.id.insert.InsertGeneratedIdentifierDelegate;
 import org.hibernate.metamodel.mapping.AttributeMapping;
+import org.hibernate.metamodel.mapping.AttributeMappingsList;
 import org.hibernate.metamodel.mapping.BasicEntityIdentifierMapping;
 import org.hibernate.metamodel.mapping.PluralAttributeMapping;
 import org.hibernate.persister.entity.AbstractEntityPersister;
-import org.hibernate.persister.entity.AttributeMappingsList;
 import org.hibernate.sql.model.MutationOperationGroup;
 import org.hibernate.sql.model.MutationType;
 import org.hibernate.sql.model.TableMapping;
@@ -32,9 +36,6 @@ import org.hibernate.sql.model.ValuesAnalysis;
 import org.hibernate.sql.model.ast.builder.MutationGroupBuilder;
 import org.hibernate.sql.model.ast.builder.TableInsertBuilder;
 import org.hibernate.sql.model.ast.builder.TableInsertBuilderStandard;
-import org.hibernate.generator.Generator;
-import org.hibernate.generator.OnExecutionGenerator;
-import org.hibernate.generator.BeforeExecutionGenerator;
 import org.hibernate.tuple.entity.EntityMetamodel;
 
 import static org.hibernate.generator.EventType.INSERT;
@@ -49,15 +50,21 @@ import static org.hibernate.generator.EventType.INSERT;
 @Internal
 public class InsertCoordinator extends AbstractMutationCoordinator {
 	private final MutationOperationGroup staticInsertGroup;
-	private final BasicBatchKey insertBatchKey;
+	private final BasicBatchKey batchKey;
 
 	public InsertCoordinator(AbstractEntityPersister entityPersister, SessionFactoryImplementor factory) {
 		super( entityPersister, factory );
 
-		insertBatchKey = new BasicBatchKey(
-				entityPersister.getEntityName() + "#INSERT",
-				null
-		);
+		if ( entityPersister.hasInsertGeneratedProperties() ) {
+			// disable batching in case of insert generated properties
+			batchKey = null;
+		}
+		else {
+			batchKey = new BasicBatchKey(
+					entityPersister.getEntityName() + "#INSERT",
+					null
+			);
+		}
 
 		if ( entityPersister.getEntityMetamodel().isDynamicInsert() ) {
 			// the entity specified dynamic-insert - skip generating the
@@ -73,8 +80,9 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 		return staticInsertGroup;
 	}
 
-	public BasicBatchKey getInsertBatchKey() {
-		return insertBatchKey;
+	@Override
+	protected BatchKey getBatchKey() {
+		return batchKey;
 	}
 
 	/**
@@ -146,7 +154,7 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 
 		final TableInclusionChecker tableInclusionChecker = getTableInclusionChecker( insertValuesAnalysis );
 
-		final MutationExecutor mutationExecutor = executor( session, staticInsertGroup );
+		final MutationExecutor mutationExecutor = executor( session, staticInsertGroup, false );
 
 		decomposeForInsert(
 				mutationExecutor,
@@ -215,7 +223,7 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 		} );
 	}
 
-	private static void breakDownJdbcValue(
+	protected void breakDownJdbcValue(
 			Object id,
 			SharedSessionContractImplementor session,
 			JdbcValueBindings jdbcValueBindings,
@@ -235,7 +243,7 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 		);
 	}
 
-	private void decomposeAttribute(
+	protected void decomposeAttribute(
 			Object value,
 			SharedSessionContractImplementor session,
 			JdbcValueBindings jdbcValueBindings,
@@ -243,9 +251,12 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 		if ( !(mapping instanceof PluralAttributeMapping) ) {
 			mapping.decompose(
 					value,
-					(jdbcValue, selectableMapping) -> {
+					0,
+					jdbcValueBindings,
+					null,
+					(valueIndex, bindings, noop, jdbcValue, selectableMapping) -> {
 						if ( selectableMapping.isInsertable() ) {
-							jdbcValueBindings.bindValue(
+							bindings.bindValue(
 									jdbcValue,
 									entityPersister().physicalTableNameForMutation( selectableMapping ),
 									selectableMapping.getSelectionExpression(),
@@ -262,7 +273,7 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 		final boolean[] insertability = getPropertiesToInsert( values );
 		final MutationOperationGroup insertGroup = generateDynamicInsertSqlGroup( insertability );
 
-		final MutationExecutor mutationExecutor = executor( session, insertGroup );
+		final MutationExecutor mutationExecutor = executor( session, insertGroup, true );
 
 		final InsertValuesAnalysis insertValuesAnalysis = new InsertValuesAnalysis( entityPersister(), values );
 
@@ -292,11 +303,11 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 		}
 	}
 
-	private MutationExecutor executor(SharedSessionContractImplementor session, MutationOperationGroup insertGroup) {
+	private MutationExecutor executor(SharedSessionContractImplementor session, MutationOperationGroup group, boolean dynamicUpdate) {
 		return session.getFactory()
 				.getServiceRegistry()
 				.getService( MutationExecutorService.class )
-				.createExecutor( () -> insertBatchKey, insertGroup, session );
+				.createExecutor( resolveBatchKeyAccess( dynamicUpdate, session ), group, session );
 	}
 
 	protected static TableInclusionChecker getTableInclusionChecker(InsertValuesAnalysis insertValuesAnalysis) {
@@ -398,5 +409,13 @@ public class InsertCoordinator extends AbstractMutationCoordinator {
 			&& generator.generatesOnInsert()
 			&& generator.generatedOnExecution()
 			&& ( (OnExecutionGenerator) generator ).referenceColumnsInSql(dialect);
+	}
+
+	/**
+	 * @deprecated Use {@link #getBatchKey()}
+	 */
+	@Deprecated
+	public BasicBatchKey getInsertBatchKey() {
+		return batchKey;
 	}
 }

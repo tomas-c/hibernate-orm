@@ -93,6 +93,7 @@ import static org.hibernate.type.SqlTypes.CLOB;
 import static org.hibernate.type.SqlTypes.DECIMAL;
 import static org.hibernate.type.SqlTypes.NUMERIC;
 import static org.hibernate.type.SqlTypes.SQLXML;
+import static org.hibernate.type.SqlTypes.TIME;
 import static org.hibernate.type.SqlTypes.TIMESTAMP_WITH_TIMEZONE;
 import static org.hibernate.type.SqlTypes.TIME_WITH_TIMEZONE;
 import static org.hibernate.type.SqlTypes.TINYINT;
@@ -107,6 +108,9 @@ import static org.hibernate.type.descriptor.DateTimeUtils.appendAsTimestampWithN
  * A {@linkplain Dialect SQL dialect} for DB2 for LUW (Linux, Unix, and Windows) version 10.5 and above.
  *
  * @author Gavin King
+ *
+ * @see DB2iDialect
+ * @see DB2zDialect
  */
 public class DB2Dialect extends Dialect {
 
@@ -189,6 +193,7 @@ public class DB2Dialect extends Dialect {
 				return "clob";
 			case TIMESTAMP_WITH_TIMEZONE:
 				return "timestamp($p)";
+			case TIME:
 			case TIME_WITH_TIMEZONE:
 				return "time";
 			case BINARY:
@@ -289,8 +294,6 @@ public class DB2Dialect extends Dialect {
 		functionFactory.octetLength();
 		functionFactory.ascii();
 		functionFactory.char_chr();
-		functionFactory.trunc();
-//		functionFactory.truncate();
 		functionFactory.insert();
 		functionFactory.characterLength_length( SqlAstNodeRenderingMode.DEFAULT );
 		functionFactory.stddev();
@@ -306,6 +309,7 @@ public class DB2Dialect extends Dialect {
 			functionFactory.varPopSamp();
 			functionFactory.varianceSamp();
 			functionFactory.dateTrunc();
+			functionFactory.trunc_dateTrunc();
 		}
 		else {
 			// Before version 11, the position function required the use of the code units
@@ -321,7 +325,7 @@ public class DB2Dialect extends Dialect {
 			functionFactory.stddevSamp_sumCount();
 			functionContributions.getFunctionRegistry().registerAlternateKey( "var_pop", "variance" );
 			functionFactory.varSamp_sumCount();
-			functionFactory.dateTrunc_trunc();
+			functionFactory.trunc_dateTrunc_trunc();
 		}
 
 		functionFactory.addYearsMonthsDaysHoursMinutesSeconds();
@@ -409,9 +413,37 @@ public class DB2Dialect extends Dialect {
 		if ( getDB2Version().isBefore( 11 ) ) {
 			return timestampdiffPatternV10( unit, fromTemporalType, toTemporalType );
 		}
-		StringBuilder pattern = new StringBuilder();
-		boolean castFrom = fromTemporalType != TemporalType.TIMESTAMP && !unit.isDateUnit();
-		boolean castTo = toTemporalType != TemporalType.TIMESTAMP && !unit.isDateUnit();
+		final StringBuilder pattern = new StringBuilder();
+		final String fromExpression;
+		final String toExpression;
+		if ( unit.isDateUnit() ) {
+			fromExpression = "?2";
+			toExpression = "?3";
+		}
+		else {
+			switch ( fromTemporalType ) {
+				case DATE:
+					fromExpression = "cast(?2 as timestamp)";
+					break;
+				case TIME:
+					fromExpression = "timestamp('1970-01-01',?2)";
+					break;
+				default:
+					fromExpression = "?2";
+					break;
+			}
+			switch ( toTemporalType ) {
+				case DATE:
+					toExpression = "cast(?3 as timestamp)";
+					break;
+				case TIME:
+					toExpression = "timestamp('1970-01-01',?3)";
+					break;
+				default:
+					toExpression = "?3";
+					break;
+			}
+		}
 		switch ( unit ) {
 			case NATIVE:
 			case NANOSECOND:
@@ -427,26 +459,24 @@ public class DB2Dialect extends Dialect {
 			default:
 				pattern.append( "?1s_between(" );
 		}
-		if ( castTo ) {
-			pattern.append( "cast(?3 as timestamp)" );
-		}
-		else {
-			pattern.append( "?3" );
-		}
+		pattern.append( toExpression );
 		pattern.append( ',' );
-		if ( castFrom ) {
-			pattern.append( "cast(?2 as timestamp)" );
-		}
-		else {
-			pattern.append( "?2" );
-		}
+		pattern.append( fromExpression );
 		pattern.append( ')' );
 		switch ( unit ) {
 			case NATIVE:
-				pattern.append( "+(microsecond(?3)-microsecond(?2))/1e6)" );
+				pattern.append( "+(microsecond(");
+				pattern.append( toExpression );
+				pattern.append(")-microsecond(");
+				pattern.append( fromExpression );
+				pattern.append("))/1e6)" );
 				break;
 			case NANOSECOND:
-				pattern.append( "*1e9+(microsecond(?3)-microsecond(?2))*1e3)" );
+				pattern.append( "*1e9+(microsecond(");
+				pattern.append( toExpression );
+				pattern.append(")-microsecond(");
+				pattern.append( fromExpression );
+				pattern.append("))*1e3)" );
 				break;
 			case MONTH:
 				pattern.append( ')' );
@@ -459,26 +489,78 @@ public class DB2Dialect extends Dialect {
 	}
 
 	public static String timestampdiffPatternV10(TemporalUnit unit, TemporalType fromTemporalType, TemporalType toTemporalType) {
-		final boolean castFrom = fromTemporalType != TemporalType.TIMESTAMP && !unit.isDateUnit();
-		final boolean castTo = toTemporalType != TemporalType.TIMESTAMP && !unit.isDateUnit();
-		final String fromExpression = castFrom ? "cast(?2 as timestamp)" : "?2";
-		final String toExpression = castTo ? "cast(?3 as timestamp)" : "?3";
+		final boolean isTime = fromTemporalType == TemporalType.TIME || toTemporalType == TemporalType.TIME;
+		final String fromExpression;
+		final String toExpression;
+		if ( unit.isDateUnit() ) {
+			if ( fromTemporalType == TemporalType.TIME ) {
+				fromExpression = "timestamp('1970-01-01',?2)";
+			}
+			else {
+				fromExpression = "?2";
+			}
+			if ( toTemporalType == TemporalType.TIME ) {
+				toExpression = "timestamp('1970-01-01',?3)";
+			}
+			else {
+				toExpression = "?3";
+			}
+		}
+		else {
+			if ( fromTemporalType == TemporalType.DATE ) {
+				fromExpression = "cast(?2 as timestamp)";
+			}
+			else {
+				fromExpression = "?2";
+			}
+			if ( toTemporalType == TemporalType.DATE ) {
+				toExpression = "cast(?3 as timestamp)";
+			}
+			else {
+				toExpression = "?3";
+			}
+		}
 		switch ( unit ) {
 			case NATIVE:
-				return "(select (days(t2)-days(t1))*86400+(midnight_seconds(t2)-midnight_seconds(t1))+(microsecond(t2)-microsecond(t1))/1e6 " +
-						"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				if ( isTime ) {
+					return "(midnight_seconds(" + toExpression + ")-midnight_seconds(" + fromExpression + "))";
+				}
+				else {
+					return "(select (days(t2)-days(t1))*86400+(midnight_seconds(t2)-midnight_seconds(t1))+(microsecond(t2)-microsecond(t1))/1e6 " +
+							"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				}
 			case NANOSECOND:
-				return "(select (days(t2)-days(t1))*86400+(midnight_seconds(t2)-midnight_seconds(t1))*1e9+(microsecond(t2)-microsecond(t1))*1e3 " +
-						"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				if ( isTime ) {
+					return "(midnight_seconds(" + toExpression + ")-midnight_seconds(" + fromExpression + "))*1e9";
+				}
+				else {
+					return "(select (days(t2)-days(t1))*86400+(midnight_seconds(t2)-midnight_seconds(t1))*1e9+(microsecond(t2)-microsecond(t1))*1e3 " +
+							"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				}
 			case SECOND:
-				return "(select (days(t2)-days(t1))*86400+(midnight_seconds(t2)-midnight_seconds(t1)) " +
-						"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				if ( isTime ) {
+					return "(midnight_seconds(" + toExpression + ")-midnight_seconds(" + fromExpression + "))";
+				}
+				else {
+					return "(select (days(t2)-days(t1))*86400+(midnight_seconds(t2)-midnight_seconds(t1)) " +
+							"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				}
 			case MINUTE:
-				return "(select (days(t2)-days(t1))*1440+(midnight_seconds(t2)-midnight_seconds(t1))/60 from " +
-						"lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				if ( isTime ) {
+					return "(midnight_seconds(" + toExpression + ")-midnight_seconds(" + fromExpression + "))/60";
+				}
+				else {
+					return "(select (days(t2)-days(t1))*1440+(midnight_seconds(t2)-midnight_seconds(t1))/60 from " +
+							"lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				}
 			case HOUR:
-				return "(select (days(t2)-days(t1))*24+(midnight_seconds(t2)-midnight_seconds(t1))/3600 " +
-						"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				if ( isTime ) {
+					return "(midnight_seconds(" + toExpression + ")-midnight_seconds(" + fromExpression + "))/3600";
+				}
+				else {
+					return "(select (days(t2)-days(t1))*24+(midnight_seconds(t2)-midnight_seconds(t1))/3600 " +
+							"from lateral(values(" + fromExpression + ',' + toExpression + ")) as temp(t1,t2))";
+				}
 			case YEAR:
 				return "(year(" + toExpression + ")-year(" + fromExpression + "))";
 			// the months_between() function results
@@ -499,19 +581,24 @@ public class DB2Dialect extends Dialect {
 	@Override
 	public String timestampaddPattern(TemporalUnit unit, TemporalType temporalType, IntervalType intervalType) {
 		final StringBuilder pattern = new StringBuilder();
-		final boolean castTo;
+		final String timestampExpression;
 		if ( unit.isDateUnit() ) {
-			castTo = temporalType == TemporalType.TIME;
+			if ( temporalType == TemporalType.TIME ) {
+				timestampExpression = "timestamp('1970-01-01',?3)";
+			}
+			else {
+				timestampExpression = "?3";
+			}
 		}
 		else {
-			castTo = temporalType == TemporalType.DATE;
+			if ( temporalType == TemporalType.DATE ) {
+				timestampExpression = "cast(?3 as timestamp)";
+			}
+			else {
+				timestampExpression = "?3";
+			}
 		}
-		if (castTo) {
-			pattern.append("cast(?3 as timestamp)");
-		}
-		else {
-			pattern.append("?3");
-		}
+		pattern.append(timestampExpression);
 		pattern.append("+(");
 		// DB2 supports temporal arithmetic. See https://www.ibm.com/support/knowledgecenter/en/SSEPGG_9.7.0/com.ibm.db2.luw.sql.ref.doc/doc/r0023457.html
 		switch (unit) {
@@ -1012,6 +1099,12 @@ public class DB2Dialect extends Dialect {
 				return "dayofweek(?2)";
 			case QUARTER:
 				return "quarter(?2)";
+			case EPOCH:
+				if ( getDB2Version().isBefore( 11 ) ) {
+					return timestampdiffPattern( TemporalUnit.SECOND, TemporalType.TIMESTAMP, TemporalType.TIMESTAMP )
+							.replace( "?2", "'1970-01-01 00:00:00'" )
+							.replace( "?3", "?2" );
+				}
 		}
 		return super.extractPattern( unit );
 	}

@@ -13,7 +13,6 @@ import org.hibernate.dialect.Dialect;
 import org.hibernate.engine.jdbc.LobCreationContext;
 import org.hibernate.engine.jdbc.LobCreator;
 import org.hibernate.engine.jdbc.connections.spi.JdbcConnectionAccess;
-import org.hibernate.engine.jdbc.connections.spi.MultiTenantConnectionProvider;
 import org.hibernate.engine.jdbc.env.internal.JdbcEnvironmentInitiator;
 import org.hibernate.engine.jdbc.env.spi.ExtractedDatabaseMetaData;
 import org.hibernate.engine.jdbc.env.spi.JdbcEnvironment;
@@ -34,8 +33,6 @@ public class JdbcServicesImpl implements JdbcServices, ServiceRegistryAwareServi
 	private ServiceRegistryImplementor serviceRegistry;
 	private JdbcEnvironment jdbcEnvironment;
 
-	private boolean multiTenancyEnabled;
-
 	private SqlStatementLogger sqlStatementLogger;
 
 	@Override
@@ -48,14 +45,7 @@ public class JdbcServicesImpl implements JdbcServices, ServiceRegistryAwareServi
 		this.jdbcEnvironment = serviceRegistry.getService( JdbcEnvironment.class );
 		assert jdbcEnvironment != null : "JdbcEnvironment was not found";
 
-		this.multiTenancyEnabled = serviceRegistry.getService(MultiTenantConnectionProvider.class)!=null;
-
-		final boolean showSQL = ConfigurationHelper.getBoolean( Environment.SHOW_SQL, configValues, false );
-		final boolean formatSQL = ConfigurationHelper.getBoolean( Environment.FORMAT_SQL, configValues, false );
-		final boolean highlightSQL = ConfigurationHelper.getBoolean( Environment.HIGHLIGHT_SQL, configValues, false );
-		final long logSlowQuery = ConfigurationHelper.getLong( Environment.LOG_SLOW_QUERY, configValues, 0 );
-
-		this.sqlStatementLogger = new SqlStatementLogger( showSQL, formatSQL, highlightSQL, logSlowQuery );
+		this.sqlStatementLogger = serviceRegistry.getService( SqlStatementLogger.class );
 	}
 
 	@Override
@@ -65,7 +55,7 @@ public class JdbcServicesImpl implements JdbcServices, ServiceRegistryAwareServi
 
 	@Override
 	public JdbcConnectionAccess getBootstrapJdbcConnectionAccess() {
-		return JdbcEnvironmentInitiator.buildBootstrapJdbcConnectionAccess( multiTenancyEnabled, serviceRegistry );
+		return JdbcEnvironmentInitiator.buildBootstrapJdbcConnectionAccess( serviceRegistry );
 	}
 
 	@Override

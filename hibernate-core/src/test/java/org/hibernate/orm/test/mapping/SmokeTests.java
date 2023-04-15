@@ -8,6 +8,29 @@ package org.hibernate.orm.test.mapping;
 
 import java.sql.Statement;
 import java.sql.Types;
+
+import org.hibernate.metamodel.mapping.EntityIdentifierMapping;
+import org.hibernate.metamodel.mapping.ModelPart;
+import org.hibernate.metamodel.mapping.internal.BasicAttributeMapping;
+import org.hibernate.metamodel.mapping.internal.EmbeddedAttributeMapping;
+import org.hibernate.metamodel.mapping.internal.ToOneAttributeMapping;
+import org.hibernate.type.ConvertedBasicType;
+import org.hibernate.type.descriptor.converter.internal.NamedEnumValueConverter;
+import org.hibernate.type.descriptor.converter.internal.OrdinalEnumValueConverter;
+import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
+import org.hibernate.type.descriptor.converter.spi.EnumValueConverter;
+import org.hibernate.type.descriptor.converter.spi.JpaAttributeConverter;
+import org.hibernate.persister.entity.EntityPersister;
+import org.hibernate.type.descriptor.jdbc.spi.JdbcTypeRegistry;
+
+import org.hibernate.testing.orm.junit.DomainModel;
+import org.hibernate.testing.orm.junit.ServiceRegistry;
+import org.hibernate.testing.orm.junit.SessionFactory;
+import org.hibernate.testing.orm.junit.SessionFactoryScope;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
@@ -20,35 +43,13 @@ import jakarta.persistence.Id;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 
-import org.hibernate.metamodel.mapping.EntityIdentifierMapping;
-import org.hibernate.metamodel.mapping.ModelPart;
-import org.hibernate.metamodel.mapping.internal.BasicAttributeMapping;
-import org.hibernate.metamodel.mapping.internal.EmbeddedAttributeMapping;
-import org.hibernate.metamodel.mapping.internal.ToOneAttributeMapping;
-import org.hibernate.type.descriptor.converter.internal.NamedEnumValueConverter;
-import org.hibernate.type.descriptor.converter.internal.OrdinalEnumValueConverter;
-import org.hibernate.type.descriptor.converter.spi.BasicValueConverter;
-import org.hibernate.type.descriptor.converter.spi.EnumValueConverter;
-import org.hibernate.type.descriptor.converter.spi.JpaAttributeConverter;
-import org.hibernate.persister.entity.EntityPersister;
-import org.hibernate.type.BasicType;
-import org.hibernate.type.CustomType;
-import org.hibernate.type.descriptor.jdbc.spi.JdbcTypeRegistry;
-
-import org.hibernate.testing.orm.junit.DomainModel;
-import org.hibernate.testing.orm.junit.ServiceRegistry;
-import org.hibernate.testing.orm.junit.SessionFactory;
-import org.hibernate.testing.orm.junit.SessionFactoryScope;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.CoreMatchers.sameInstance;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.isOneOf;
 
 /**
  * @author Steve Ebersole
@@ -92,15 +93,17 @@ public class SmokeTests {
 
 			assertThat( genderAttrMapping.getJavaType().getJavaTypeClass(), equalTo( Gender.class ) );
 
-			final CustomType<?> basicType = (CustomType<?>) genderAttrMapping.getJdbcMapping();
-			final org.hibernate.type.EnumType<?> enumType = (org.hibernate.type.EnumType<?>) basicType.getUserType();
-			final EnumValueConverter<?, ?> valueConverter = enumType.getEnumValueConverter();
+			final ConvertedBasicType<?> jdbcMapping = (ConvertedBasicType<?>) genderAttrMapping.getJdbcMapping();
+			final EnumValueConverter<?, ?> valueConverter = (EnumValueConverter<?, ?>) jdbcMapping.getValueConverter();
 			assertThat( valueConverter, instanceOf( OrdinalEnumValueConverter.class ) );
 			assertThat(
 					valueConverter.getDomainJavaType().getJavaTypeClass(),
 					equalTo( genderAttrMapping.getJavaType().getJavaTypeClass() )
 			);
-			assertThat( valueConverter.getRelationalJavaType().getJavaTypeClass(), equalTo( Integer.class ) );
+			assertThat(
+					valueConverter.getRelationalJavaType().getJavaTypeClass(),
+					isOneOf( Byte.class, Short.class, Integer.class )
+			);
 
 			assertThat(
 					jdbcTypeRegistry.getDescriptor( valueConverter.getJdbcTypeCode() ),
@@ -117,9 +120,8 @@ public class SmokeTests {
 
 			assertThat( attrMapping.getJavaType().getJavaTypeClass(), equalTo( Gender.class ) );
 
-			final CustomType<?> basicType = (CustomType<?>) attrMapping.getJdbcMapping();
-			final org.hibernate.type.EnumType<?> enumType = (org.hibernate.type.EnumType<?>) basicType.getUserType();
-			final EnumValueConverter<?, ?> valueConverter = enumType.getEnumValueConverter();
+			final ConvertedBasicType<?> jdbcMapping = (ConvertedBasicType<?>) attrMapping.getJdbcMapping();
+			final EnumValueConverter<?, ?> valueConverter = (EnumValueConverter<?, ?>) jdbcMapping.getValueConverter();
 			assertThat( valueConverter, instanceOf( NamedEnumValueConverter.class ) );
 			assertThat(
 					valueConverter.getDomainJavaType().getJavaTypeClass(),
@@ -142,7 +144,7 @@ public class SmokeTests {
 
 			assertThat( attrMapping.getJavaType().getJavaTypeClass(), equalTo( Gender.class ) );
 
-			final BasicValueConverter valueConverter = ( (BasicType<?>) attrMapping.getJdbcMapping() ).getValueConverter();
+			final BasicValueConverter<?,?> valueConverter = ( (ConvertedBasicType<?>) attrMapping.getJdbcMapping() ).getValueConverter();
 			assertThat( valueConverter, instanceOf( JpaAttributeConverter.class ) );
 			assertThat( valueConverter.getDomainJavaType(), is( attrMapping.getJavaType() ) );
 			assertThat( valueConverter.getRelationalJavaType().getJavaTypeClass(), equalTo( Character.class ) );
